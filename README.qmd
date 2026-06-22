@@ -1,0 +1,1431 @@
+---
+output: github_document
+editor_options: 
+  chunk_output_type: console
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "man/figures/README-",
+  out.width = "100%"
+)
+```
+
+# carpeDIAMS Tutorial
+
+<!-- badges: start -->
+<!-- badges: end -->
+
+**carpeDIAMS** is an R package for converting DIA (Data Independent Acquisition) mass spectrometry data into pseudo-DDA (Data Dependent Acquisition) spectra. This package provides functions to extract MS2 information from DIA experiments and create consolidated spectra based on correlation analysis.
+
+## Installation
+
+You can install the development version of carpeDIAMS like so:
+
+```{r}
+pak::pak("https://github.com/JohanLassen/carpeDIAMS")
+```
+
+
+
+```{r}
+library(readr)
+library(xcms)
+library(tibble)
+library(purrr)
+library(Spectra)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(SummarizedExperiment)
+library(rhdf5)
+library(arrow)
+library(duckdb)
+Rcpp::sourceCpp("/faststorage/project/forensics_TOFscreenings/06_integrated_workflow/modules/carpediams/scripts/gemini_upgma.cpp")
+source("/faststorage/project/forensics_TOFscreenings/06_integrated_workflow/modules/carpediams/scripts/spectral_filtering_v4_batch.R")
+source("/faststorage/project/forensics_TOFscreenings/06_integrated_workflow/modules/shared/carpeDIAMS/R/catch_ms2_functions.R")
+
+sample <- "/faststorage/project/forensics_TOFscreenings/06_integrated_workflow/results/tmp/peak_picked/TX35284_A_01-346381_1_1-G.1_01_18036.rds"
+dataset <- "/faststorage/project/forensics_TOFscreenings/06_integrated_workflow/results_rare/results/feature_definitions.rds"
+
+test <- read_rds(sample) |> xcms::chromPeaks() |> as_tibble()
+
+references <- read_rds(dataset)
+
+references |> as_tibble(rownames = "feature")
+
+mz1 <- test |> pull(mz)
+mz2 <- references$mzmed
+rt1 <- test |> pull(rt)
+rt2 <- references$rtmed
+rt <- c(rt1, rt2)
+mz <- c(mz1, mz2)
+
+groups <- fast_1D_upgma_grouping_cpp(mz, maxDiff = 0.01)
+groups2 <- groups
+
+# Make progress bar in for loop
+pb <- txtProgressBar(min = 0, max = length(unique(groups)), style = 3)
+for (i in unique(groups)){
+  idx <- which(groups == i)
+  mz_subset <- mz[idx]
+  rt_groups <- fast_1D_upgma_grouping_cpp(rt[idx], maxDiff = 10)
+  new_groups <- paste0(i, "_", rt_groups)
+  groups2[idx] <- new_groups
+  setTxtProgressBar(pb, which(unique(groups) == i))
+}
+close(pb)
+groups2
+
+g1 <- groups2[1:length(mz1)]
+g2 <- groups2[(length(mz1)+1):length(groups2)]
+
+# find indices of g2 that exist in g1
+indices <- which(g2 %in% g1)
+references_subset <- references[indices, ]
+references$group <- g2
+test$group <- g1
+
+test_object <- readr::read_rds(sample)
+# Make feature names, eg., "FT0004" for test
+test <- test |> 
+  rowid_to_column() |> 
+  mutate(
+    feature_id = paste0("FT", sprintf("%05d", row_number()))
+  ) |> 
+  select(feature_id, everything())
+
+
+output_dir = "single_sample"
+# Make the output dir if it does not exist
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+library(data.table)
+test$rtime_adjusted <- test$rt
+feature_peaks <- getBackendPeaks(test_object, fd = test)
+spectra_df <- spectra(test_object)@backend@spectraData@listData |> bind_cols()
+spectra_df$rtime_adjusted <- spectra_df$rtime
+scan_info <- extractScanInfo(feature_peaks, fileNames(test_object), spectra_df)
+
+specs <- 
+  Ms2PseudoRaw_Final(
+    scan_info,
+    spectra(test_object),
+    maxDiff = 0.01,
+    output_dir = output_dir,
+    return_spectra = TRUE
+  )
+
+# Open persistent DuckDB connection ONCE for the entire batch
+con <- dbConnect(duckdb())
+dbExecute(con, sprintf("CREATE OR REPLACE VIEW pointers AS SELECT * FROM read_parquet('%s/*_pointers.parquet')", output_dir))
+dbExecute(con, sprintf("CREATE OR REPLACE VIEW pool AS SELECT * FROM read_parquet('%s/*_pool.parquet')", output_dir))
+on.exit(dbDisconnect(con, shutdown = TRUE))
+
+# First, find which features produced NAs:
+feature_indices <- as.numeric(unique(scan_info$feature))
+results <- batch_clean_spectra(feature_indices, output_dir, fetch_chunk_size = 100)
+readr::write_rds(results, "single_sample/pseudo_ms2_unfiltered.rds")
+
+results |> 
+  filter(fdr<0.01) |> 
+  write_rds("single_sample/pseudo_ms2_filtered.rds")
+
+```
+
+
+
+
+
+
+```{r load_dependencies}
+#library(carpeDIAMS)
+source("/faststorage/project/forensics_TOFscreenings/04_bbcid_ms2/carpeDIAMS/R/catch_ms2_functions.R")
+source("/faststorage/project/forensics_TOFscreenings/04_bbcid_ms2/carpeDIAMS/R/cluster_functions.R")
+source("\\\\wsl.localhost\\Ubuntu-24.04\\home\\johan\\GenomeDK\\forensics_TOFscreenings\\04_bbcid_ms2\\carpeDIAMS\\R\\catch_ms2_functions.R")
+source("\\\\wsl.localhost\\Ubuntu-24.04\\home\\johan\\GenomeDK\\forensics_TOFscreenings\\04_bbcid_ms2\\carpeDIAMS\\R\\cluster_functions.R")
+
+
+library(xcms)
+library(dplyr)
+library(tibble)
+library(purrr)
+library(readr)
+library(ggplot2)
+library(cowplot)
+library(SummarizedExperiment)
+#library(paletteer)
+library(Spectra)
+library(tidyr)
+
+# Set global theme
+theme_set(theme_minimal())
+```
+
+## Complete Tutorial
+
+This tutorial demonstrates how to process DIA mass spectrometry data and create pseudo-DDA spectra using carpeDIAMS. We'll cover the complete workflow from data loading to visualization.
+
+### 1. Data Loading and Preprocessing
+First, we prepare our sample metadata and file paths. This step organizes the mzML files and creates sample groups for analysis.
+
+```{r data_loading}
+# Define file paths and create metadata
+basepath <- "O:/HE_RKA-Forskning/data/metscreen_lind/data/02_pilot_rerun/mzML_files"
+files <- list.files(basepath, recursive = TRUE, full.names = TRUE)
+files <- files[grepl("[.]mzML", files)]
+files <- files[!grepl("DDA|MS2|eV|K033|h5", files)]
+
+# Create metadata tibble
+metadata <- 
+  tibble("filepath" = files,
+         "group" = gsub(paste0(basepath, "/"), "", files)) |> 
+  mutate(group = gsub("_.*", "", group))
+
+# Filter to specific groups
+metadata <- metadata |> filter(group %in% c("positive", "traffic"))
+sample_files <- metadata$filepath
+
+# Display metadata structure
+print("Sample Metadata:")
+head(metadata)
+```
+
+### 2. XCMS Processing Pipeline
+
+This section demonstrates the standard XCMS workflow for processing DIA mass spectrometry data.
+
+```{r xcms_processing}
+
+if (file.exists("C:/Users/au557424/OneDrive - Aarhus universitet/Documents/object.rds")){
+  object <- read_rds("C:/Users/au557424/OneDrive - Aarhus universitet/Documents/object.rds")
+} else{
+  # Create MsExperiment object
+  object <- MsExperiment::readMsExperiment(
+      spectraFiles = sample_files,
+      backend = Spectra::MsBackendHdf5Peaks(),
+      hdf5path = "hdf5",
+      sampleData = metadata)
+  
+  # Filter retention time range (30-600 seconds)
+  object <- ProtGenerics::filterSpectra(object, filterRt, rt = c(30, 600)) 
+  
+  # Peak detection using CentWave algorithm
+  cwp <- CentWaveParam(ppm = 15,
+                       peakwidth = c(2, 30),
+                       prefilter = c(3, 500),
+                       snthresh = 6,
+                       mzdiff = 0.01,
+                       mzCenterFun = "wMean",
+                       integrate = 2)
+  object <- findChromPeaks(object, param = cwp, chunkSize = 1, force.overwrite = TRUE)
+  
+  # Refine peaks by merging neighboring peaks
+  mnpp <- MergeNeighboringPeaksParam(expandRt = 5)
+  object <- refineChromPeaks(object, param = mnpp, chunkSize = 1)
+  
+  # First peak grouping (correspondence)
+  pdp1 <- PeakDensityParam(sampleGroups = rep(1L, length(object)),
+                          minFraction = 0.7,
+                          binSize = 0.01,
+                          ppm = 0,
+                          bw = 30)
+  object <- groupChromPeaks(object, param = pdp1)
+  
+  # Retention time adjustment
+  pgp <- PeakGroupsParam(minFraction = 0.8, extraPeaks = 10, span = 0.5)
+  object <- adjustRtime(object, param = pgp)
+  
+  # Second peak grouping after RT adjustment
+  pdp2 <- PeakDensityParam(sampleGroups = rep(1L, length(object)),
+                          minFraction = 0.5,
+                          binSize = 0.01,
+                          ppm = 0,
+                          bw = 1.5)
+  object <- groupChromPeaks(object, param = pdp2)
+  
+  # Fill missing peaks
+  cpap <- ChromPeakAreaParam()
+  object <- fillChromPeaks(object, param = cpap, chunkSize = 1)
+  
+  # Save and reload processed object
+  write_rds(object, "object.rds")
+
+}
+
+print(paste("Processed", length(object), "samples"))
+print(paste("Found", nrow(featureDefinitions(object)), "features"))
+```
+
+
+### 3. Data Structure Exploration
+
+```{r}
+object <- readr::read_rds("/faststorage/project/forensics_TOFscreenings/01_aging_study/new_xcms_workflow/output_annotation/tmp/grouped2.rds")
+#object <- readr::read_rds("/faststorage/project/forensics_TOFscreenings/01_aging_study/new_xcms_workflow/output_all_samples/tmp/peak_integration3_dataset.rds")
+```
+
+
+#### Assay data
+
+Let's examine the different data components: assay data, row data (features), and column data (samples).
+
+```{r data_exploration}
+library(SummarizedExperiment)
+# Get quantification matrix (assay data)
+quantified_data <- quantify(object)
+assay_matrix <- assay(quantified_data)
+head(assay_matrix)
+write_csv(as_tibble(assay_matrix), "data/assay.csv")
+```
+
+#### Row data
+```{r}
+feature_info <- rowData(quantified_data)
+head(feature_info)
+write_csv(as_tibble(feature_info), "data/rowData.csv")
+```
+
+#### Sample data
+```{r}
+sample_data <- colData(quantified_data)
+head(sample_data)
+```
+
+
+
+
+
+### 4. Feature Selection and Peak Analysis
+
+Now we'll select features suitable for pseudo-DDA conversion and extract scan information.
+
+```{r feature_selection}
+fd <- featureDefinitions(object)
+peaks <- xcms::chromPeaks(object)
+
+mz_of_interest <- 271.2061
+rt_of_interest <- 376.269
+
+features_of_interest <- 
+  fd |> tibble::as_tibble(rownames = "feature") |> 
+  filter(abs(mzmed-mz_of_interest)<0.01,
+         abs(rtmed-rt_of_interest)<20)
+
+features_of_interest$mzmed
+```
+
+```{r}
+param      <- xcms::PeakGroupsParam(
+  smooth      = "loess",
+  minFraction	= 0.8,
+  span        = 1,
+  extraPeaks  = 50,
+  family      = "gaussian")
+
+msobject <- adjustRtime(object, param)
+
+pdp <- xcms::PeakDensityParam(sampleGroups = rep(1, length(msobject)), 
+                              maxFeatures  = 50,
+                              bw           = 2.5, 
+                              minFraction  = 0.3,
+                              binSize      = 0.01)
+msobject <- groupChromPeaks(msobject, pdp)
+
+feature_peaks <- getBackendPeaks(msobject, fd = features_of_interest)
+filenames <- fileNames(msobject)
+spectra_df <- spectra(msobject)@backend@spectraData@listData |> bind_cols()
+
+
+```
+
+
+```{r feature_selection}
+# Get backend peaks for each feature
+feature_peaks <- getBackendPeaks(object, fd = features_of_interest)
+filenames <- fileNames(object)
+spectra_df <- spectra(object)@backend@spectraData@listData |> bind_cols()
+scan_info <- extractScanInfo(feature_peaks, filenames, spectra_df)
+```
+
+### 5. Pseudo-DDA Spectrum Generation
+
+This section demonstrates how to convert DIA data to pseudo-DDA spectra by extracting MS2 information and applying correlation filtering.
+
+```{r}
+feature1 <- readr::read_rds("\\\\wsl.localhost\\Ubuntu-24.04\\home\\johan\\GenomeDK\\forensics_TOFscreenings\\04_bbcid_ms2\\workflow\\parquets\\example_data\\feature1.rds")
+source("\\\\wsl.localhost\\Ubuntu-24.04\\home\\johan\\GenomeDK\\forensics_TOFscreenings\\04_bbcid_ms2\\carpeDIAMS\\R\\catch_ms2_functions.R")
+source("\\\\wsl.localhost\\Ubuntu-24.04\\home\\johan\\GenomeDK\\forensics_TOFscreenings\\04_bbcid_ms2\\carpeDIAMS\\R\\cluster_functions.R")
+Rcpp::sourceCpp("\\\\wsl.localhost\\Ubuntu-24.04\\home\\johan\\GenomeDK\\forensics_TOFscreenings\\04_bbcid_ms2\\workflow\\scripts\\gemini_upgma.cpp")
+
+rowData <- readr::read_csv("\\\\wsl.localhost\\Ubuntu-24.04\\home\\johan\\GenomeDK\\forensics_TOFscreenings\\04_bbcid_ms2\\workflow\\data\\rowData.csv")
+fd <- readr::read_csv("\\\\wsl.localhost\\Ubuntu-24.04\\home\\johan\\GenomeDK\\forensics_TOFscreenings\\04_bbcid_ms2\\workflow\\data\\feature_list.csv")
+assay <- readr::read_csv("\\\\wsl.localhost\\Ubuntu-24.04\\home\\johan\\GenomeDK\\forensics_TOFscreenings\\04_bbcid_ms2\\workflow\\data\\assay.csv")
+
+# Phenylalanine: 796
+# fd |> 
+#   filter(abs(mzmed-166.0863)<0.001)
+
+scan_info <- readr::read_csv("\\\\wsl.localhost\\Ubuntu-24.04\\home\\johan\\GenomeDK\\forensics_TOFscreenings\\04_bbcid_ms2\\workflow\\data\\scan_info.rds")
+filenames <- colnames(assay)
+feature1 |> head()
+feature1$sample
+
+
+
+
+
+```
+
+
+
+##### Run a per sample clustering of mz values to generate sample-wise spectra that includes noise + random fragments
+```{r pseudo_dda_generation}
+
+# Show example of a single peak's scan information
+single_sample <- scan_info |> group_split(sample) # We just select the first feature, if there are multiple, change the 1 accordingly to the index
+#single_sample <- single_sample[1:10]
+# Set parameters for pseudo-DDA conversion
+minInt <- 1000  # Minimum intensity threshold
+spectra_object <- spectra(msobject)
+# Generate pseudo-raw MS2 spectra for each sample
+ms2_specs <- 
+  single_sample |> 
+  map(~{
+    Ms2PseudoRaw(
+      .x,
+      spectra_object,
+      minInt = 200,
+      maxDiff = 0.01
+      )
+    },
+    .progress = TRUE) 
+
+id = 1
+filename <- fileNames(msobject)[id]
+
+ms2 <- 
+  seq_along(single_sample) |> 
+  map(~{
+    ss <- single_sample[[.x]] |> filter(feature == 796)
+    Ms2PseudoRaw(
+      filename = fileNames(msobject)[.x],
+      acquisition_nums = ss |> pull(scan_indices),
+      ms1Mz = ss$mz[1],
+      apex_scan = ss$apex_scan_index[1],
+      minInt = 200,
+      maxDiff = 0.01,
+      spectra_object=spectra_object
+      )
+  },.progress=T)
+
+
+
+
+ms2 <- ms2 |> 
+  map_dfr(~bind_rows(.x, .id = "feature"), .id = "sample")
+
+ms2 <- ms2 |> mutate(feature = 796)
+p <- 
+  ms2 |> 
+  filter(sample %in% subset_samples) |> 
+  filter(mz > 120, mz < 120.1) |> 
+  ggplot(aes(x=mz, y=log(int), color = factor(groups))) +
+  geom_point()+
+  facet_wrap(~sample, ncol = 1, scales = "free")+
+  theme_minimal()
+
+ggsave(plot = p,filename = "figures/p11.pdf", height = 20, width = 10, unit = "in", bg = "white")
+
+
+
+ms2_specs[[1]] |> map_d
+
+#ms2_specs_all <- ms2_specs
+
+ms2_specs <- ms2_specs |> filter(feature == "1")
+```
+
+### 6. Visualization of Raw MS2 Data
+
+Let's visualize the raw MS2 spectra before grouping to understand the data structure.
+
+```{r raw_ms2_visualization, fig.height=6, fig.width=8}
+
+ms2_specs$file <- sapply(ms2_specs$sample, function(x) filenames[as.numeric(x)])
+# Visualize MS2 spectra from 4 random samples
+sample_files <- sample(unique(ms2_specs$file), size = 4)
+library(ggplot2)
+ms2_raw_plot <- ms2_specs |>
+  filter(file %in% sample_files) |> 
+  ggplot(aes(x = mz, y = int, color = file)) +
+  geom_line(show.legend = FALSE) +
+  facet_wrap(~basename(file), scales = "free", ncol = 1) +
+  scale_color_brewer(palette = "Set1") +
+  labs(title = "Raw MS2 Spectra Across Samples",
+       x = "m/z", 
+       y = "Intensity") +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 8),
+    plot.title = element_text(size = 8),
+    axis.text = element_text(size = 7),
+    strip.text = element_text(size = 7)
+  )
+ggsave(plot = ms2_raw_plot, filename = "figures/1.pdf", height =  5, width = 7, bg = "white")
+print(ms2_raw_plot)
+```
+
+### 7. Peak Grouping and Correlation Analysis
+
+This is the core step where we group similar m/z values across samples and calculate correlations.
+
+```{r peak_grouping}
+ms2_specs <- feature1
+ms2_specs <- 
+  ms2_specs |> 
+  group_split(sample) |> 
+  map(mutate, mz_g1 = fast_1D_upgma_grouping_cpp(fragment_mz, maxDiff=0.01),.progress=T)
+
+ms2_specs <- 
+  ms2_specs |>
+  map_dfr(~{
+    .x |> 
+      mutate(file_scan = paste0(sample, scan)) |> 
+  group_by(mz_g1) |> 
+  mutate(mz_g1 = mean(fragment_mz)) |> 
+  group_by(mz_g1, file_scan) |> 
+  summarize(sample = sample[1],
+            feature = feature[1],
+            fragment_mz = mean(fragment_mz),
+            int = sum(int),
+            apex_scan = apex_scan[1],
+            ms1_int = ms1_int[1],
+            mz_g1 = mz_g1
+            )
+  },.progress=T)
+
+
+# Add scan and file information for grouping
+ms2_specs_extended <- 
+  ms2 |> 
+  group_by(groups, sample, scan) |> 
+  mutate(mz_g1 = mean(mz)) |> 
+  ungroup()
+
+
+  
+pseudo_groups <- fast_1D_upgma_grouping_cpp(ms2_specs_extended$mz, maxDiff=0.01)
+
+# Group peaks with similar m/z values across all samples
+pseudo_groups <- groupMultiple(
+  mz = ms2_specs_extended$mz_g1, 
+  int = ms2_specs_extended$int, 
+  id = ms2_specs_extended$file_scan,
+  maxDiff= 0.01
+)
+
+
+ms2_specs_extended <- ms2
+ms2_specs_extended$grouped_mz <- pseudo_groups
+
+ms2_specs_extended <- ms2_specs_extended |> group_by(grouped_mz) |> mutate(mz_g2 = mean(mz))
+
+print(paste("Created", length(unique(pseudo_groups)), "m/z groups"))
+```
+
+
+```{r}
+library(tidyverse)
+library(xcms)
+#ms2_specs_extended <-
+# read_csv("../feature_M271.2061T376.269.csv")
+
+#ms2_specs_extended <- ms2_specs_extended |> group_by(grouped_mz) |> mutate(mz_g2 = mean(mz))
+ms2_specs_extended <- ms2_specs_extended |> filter(ms1_int > 1000)
+ms2_specs_extended <- ms2_specs_extended |> ungroup() |> mutate(file = sapply(sample, FUN=function(x) filenames[x]))
+
+consistent_groups <- 
+  ms2_specs_extended |> 
+  group_by(mz_g2) |> 
+  summarize(count = n()) |> 
+  filter(count > 500) |> 
+  pull(mz_g2)
+
+consistent_groups <- 
+  ms2_specs_extended |> 
+  filter(mz_g2 %in% consistent_groups) |> 
+  group_by(sample, mz_g2) |>
+  summarize(count = n()) |> 
+  ungroup() |> 
+  filter(count > 10) |> # Min elution count 
+  group_by(mz_g2) |> 
+  summarize(count = n()) |>  
+  filter(count > 10) |> 
+  pull(mz_g2)# Min number of samples with min elution counts
+
+```
+
+
+### 8. Correlation Analysis
+
+Now we calculate elution and sample correlations to identify high-quality pseudo-DDA peaks.
+
+```{r correlation_analysis}
+# Calculate elution profile correlations (MS1 vs MS2 across retention time)
+elution_correlation <- 
+  ms2_specs_extended |> 
+  filter(!is.na(ms1_int), mz_g2 %in% consistent_groups) |> 
+  mutate(file_base = gsub("[.]mzML.*", "", basename(file)),
+         g = paste0(file_base, grouped_mz)) |>
+  group_by(g) |> 
+  summarise(
+    elution_cor = cor(log10(1 + int), log10(1 + ms1_int), use = "complete.obs"),
+    ms1_total = sum(ms1_int, na.rm = TRUE),
+    ms2_total = sum(int, na.rm = TRUE),
+    n_scans = n(),
+    mz_g2 = mz_g2[1],
+    mz_g1 = mz_g1[1],
+    mz = mean(mz, na.rm = TRUE),
+    .groups = "drop")
+
+
+library(data.table)
+
+dt <- as.data.table(ms2_specs_extended)
+
+# Pre-compute file_base én gang (undgå gsub per gruppe)
+dt[, file_base := sub("[.]mzML.*", "", basename(file))]
+
+# Brug setkey for hurtigere grouping
+setkey(dt, file_base, mz_g2)
+
+elution_correlation <- dt[
+  !is.na(ms1_int) & mz_g2 %in% consistent_groups,
+  {
+    log_int <- log10(1 + int)
+    log_ms1 <- log10(1 + ms1_int)
+    .(
+      elution_cor = cor(log_int, log_ms1, use = "complete.obs"),
+      ms1_total = sum(ms1_int, na.rm = TRUE),
+      ms2_total = sum(int, na.rm = TRUE),
+      n_scans = .N,
+      mz_grouped = mz_g2[1],
+      mz_g1 = mz_g1[1],
+      mz = mean(fragment_mz, na.rm = TRUE)
+    )
+  },
+  by = .(file_base, mz_g2)
+]
+
+
+#
+# elution_correlation |>  filter(n_scans > 5) |> arrange(-elution_cor) |> filter(grouped_mz == "G371") |> View()
+# Calculate sample correlations (MS1 vs MS2 across samples)
+sample_correlation <- 
+  elution_correlation |>
+  as_tibble() |> 
+  filter(n_scans > 5) |> 
+  select(grouped_mz = mz_grouped, everything()) |> 
+  group_by(grouped_mz) |> 
+  summarise(
+    sample_cor = cor(log10(ms1_total + 1), log10(ms2_total + 1)),
+    n_samples = n(),
+    mz_g2 = mz_g2[1],
+    mean_elution_cor = mean(elution_cor, na.rm = TRUE),
+    mz = mz[1],
+    .groups = "drop"
+  ) |> 
+  filter(n_samples > 5) 
+
+
+# Combine correlation metrics
+correlation_summary <- sample_correlation |> arrange(-mean_elution_cor)
+print(paste("Correlation analysis completed for", nrow(correlation_summary), "groups"))
+```
+
+# Using mixed effects modeling with a negative binomial distribution
+
+```{r}
+library(glmmTMB)
+
+sum(table(ms2_specs_extended$mz_g2)>100)
+
+dat <- ms2_specs_extended |> filter(mz_g2 =="189.127338779994") 
+
+extract_IRR <- function(coef_row, level = 0.95) {
+  est <- coef_row["Estimate"]
+  se  <- coef_row["Std. Error"]
+  z   <- qnorm((1 + level) / 2)
+  
+  tibble(
+    IRR      = exp(est),
+    CI_lower = exp(est - z * se),
+    CI_upper = exp(est + z * se)
+  )
+}
+
+
+
+# Example: one predictor x, with random intercept for Block
+start <- Sys.time()
+IRR <- ms2_specs_extended |>
+  group_by(mz_g2) |> 
+  mutate(count = n()) |> 
+  ungroup() |> 
+  filter(count>100) |> 
+  group_split(mz_g2, .keep = T) |> 
+  map_dfr(~{
+    glmmTMB(
+      ms1_int ~ int + (1 | file),
+      family = nbinom2(),         # use nbinom1() if appropriate
+      data = .x) |>
+      summary() |> 
+      coef() |> 
+      (\(x) x$cond["int", ])() |>
+      extract_IRR() |> 
+      mutate(mz_g2 = .x$mz_g2[1])},
+      .progress=T
+    )
+
+GausEstimate <- ms2_specs_extended |>
+  group_by(mz_g2) |> 
+  mutate(count = n(), int = scale(int), ms1_int = scale(ms1_int)) |> 
+  ungroup() |> 
+  filter(count>1000) |> 
+  group_split(mz_g2, .keep = T) |> 
+  map_dfr(~{
+    glmmTMB(
+      ms1_int ~ int + (1 | file),
+      family = gaussian(),         # use nbinom1() if appropriate
+      data = .x) |>
+      summary() |> 
+      coef() |> 
+      (\(x) x$cond["int", "Estimate"])() |> 
+      as_tibble() |> 
+      mutate(mz_g2 = .x$mz_g2[1])},
+      .progress=T
+    )
+
+mz_g2_overall_cor <- 
+   ms2_specs_extended |>
+  group_by(mz_g2) |> 
+  summarize(
+    correlation = cor(int, ms1_int, method = "spearman")
+  ) |> 
+  arrange(-correlation)
+
+mz_g2_overall_cor.p <- 
+   ms2_specs_extended |>
+  group_by(mz_g2) |> 
+  summarize(
+    p = cor(int, ms1_int, method = "pearson")
+  ) |> 
+  arrange(-p)
+  
+mz_g2_IRR <- 
+  IRR |> 
+  bind_rows() |> 
+  arrange(-IRR)
+  
+mz_g2_Coef <- 
+  GausEstimate |> 
+  arrange(-value)
+
+```
+
+
+```{r}
+correlation_summary <- 
+  sample_correlation |> 
+  left_join(mz_g2_IRR) |> 
+  left_join(mz_g2_Coef) |> 
+  left_join(mz_g2_overall_cor) |> 
+  left_join(mz_g2_overall_cor.p)
+
+correlation_summary |> 
+  ggplot(aes(x=sample_cor, y=mean_elution_cor, color = p, size = p))+
+  geom_point()+
+  scale_color_distiller(palette = "Spectral") +
+  labs(
+    title = "MS2 Peak Quality Assessment",
+    x = "Sample Correlation (MS1 vs MS2)",
+    y = "Mean Elution Correlation (MS1 vs MS2)",
+    caption = "Points in upper right represent high-quality peaks",
+    color = "Total Pearson r",
+    size = "Total Pearson r"
+  ) +
+  theme_classic() +
+  theme(
+    text = element_text(size = 8),
+    plot.title = element_text(size = 8),
+    axis.text = element_text(size = 7),
+    plot.caption = element_text(size = 6)
+  )
+
+```
+
+
+### 9. Quality Control Visualization
+
+Let's visualize the correlation patterns to assess data quality.
+
+```{r correlation_visualization, fig.height=4, fig.width=6}
+correlation_plot <- correlation_summary |> 
+  ggplot(aes(x = sample_cor, y = mean_elution_cor)) +
+  geom_point(alpha = 0.6, color = "steelblue") +
+  labs(
+    title = "MS2 Peak Quality Assessment",
+    x = "Sample Correlation (MS1 vs MS2)",
+    y = "Mean Elution Correlation (MS1 vs MS2)",
+    caption = "Points in upper right represent high-quality peaks"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 8),
+    plot.title = element_text(size = 8),
+    axis.text = element_text(size = 7),
+    plot.caption = element_text(size = 6)
+  )
+
+print(correlation_plot)
+```
+
+### 10. High-Quality Peak Selection and Detailed Analysis
+
+Now we'll select high-quality peaks based on correlation thresholds and perform detailed analysis.
+
+```{r peak_selection}
+# Define quality thresholds
+cor_threshold <- 0.5
+
+# Select high-quality peaks
+high_quality_peaks <- correlation_summary |> 
+  filter(p>cor_threshold) |>
+  filter(n_samples>5)
+
+print(paste("Selected", nrow(high_quality_peaks), "high-quality peaks"))
+
+# Select a specific peak for detailed visualization
+if(nrow(high_quality_peaks) > 0) {
+  selected_group <- high_quality_peaks$grouped_mz[1]  # Select 4th best peak
+  selected_mz <- high_quality_peaks$mz[1]
+  
+  print(paste("Analyzing peak at m/z =", round(selected_mz, 4)))
+}
+```
+
+### 11. Detailed Peak Visualization
+
+Let's create comprehensive visualizations for the selected high-quality peak.
+
+** note that you can chance selected_group to whatever group of mz values you would like to visualize **
+
+```{r detailed_visualization, fig.height=8, fig.width=10}
+library(zoo)
+
+if(exists("selected_group")) {
+  # Extract data for selected peak
+  selected_peak_data <- 
+    ms2_specs_extended |> 
+    filter(grouped_mz == selected_group) |> 
+    mutate(
+      file_base = gsub("[.]mzML.*", "", basename(file)),
+      ms1_int = replace_na(ms1_int, 0)
+    ) |> 
+    group_by(file_base) |>
+    mutate(
+      log_ms1 = log10(mean(ms1_int) + 1),
+      scan = scan-apex_scan,
+      ms1_int = zoo::rollmean(ms1_int, k = 2, fill = NA),
+      int = zoo::rollmean(int, k = 2, fill = NA)
+      )
+  
+  # Elution profile plot (MS2)
+  elution_ms2 <- selected_peak_data |>
+    ggplot(aes(x = scan, y = int, color = log_ms1, group = file_base)) +
+    #geom_line(show.legend = FALSE) +
+    geom_point()+
+    scale_color_gradientn(colors = paletteer::paletteer_c("ggthemes::Blue-Green Sequential", 30)) +
+    #scale_y_continuous(trans = "log10") +
+    labs(title = "MS2 Elution Profile", y = "MS2 Intensity") +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 8),
+      plot.title = element_text(size = 8),
+      axis.text = element_text(size = 7),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank()
+    )
+  
+  # Elution profile plot (MS1)
+  elution_ms1 <- selected_peak_data |>
+    ggplot(aes(x = scan, y = ms1_int, group = file_base)) +
+    geom_line(color = "gray60") +
+    labs(title = "MS1 Elution Profile", y = "MS1 Intensity", x = "Scan Number") +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 8),
+      plot.title = element_text(size = 8),
+      axis.text = element_text(size = 7)
+    )
+  
+  # Sample correlation plot
+  sample_corr_data <- selected_peak_data |> 
+    group_by(file_base) |> 
+    summarise(
+      ms2_intensity = sum(int),
+      ms1_intensity = sum(ms1_int),
+      .groups = "drop"
+    )
+  
+  sample_corr_plot <- sample_corr_data |>
+    ggplot(aes(x = ms1_intensity, y = ms2_intensity)) +
+    geom_point(color = "steelblue", alpha = 0.7) +
+    scale_x_continuous(trans = "log10") + 
+    scale_y_continuous(trans = "log10") +
+    labs(
+      title = "Sample Correlation",
+      x = "MS1 Intensity", 
+      y = "MS2 Intensity"
+    ) +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 8),
+      plot.title = element_text(size = 8),
+      axis.text = element_text(size = 7)
+    )
+  
+  # Combine elution plots
+  combined_elution <- plot_grid(elution_ms2, elution_ms1, 
+                               ncol = 1, rel_heights = c(3, 2), 
+                               align = "hv")
+  
+  # Final combined plot
+  final_plot <- plot_grid(combined_elution, sample_corr_plot, 
+                         ncol = 2, rel_widths = c(2, 1))
+}
+print(final_plot)
+```
+
+### 12. Pseudo-DDA Spectrum Creation
+
+Finally, let's create the consolidated pseudo-DDA spectrum from high-quality peaks.
+
+```{r pseudo_spectrum, fig.height=5, fig.width=8}
+# Create consolidated spectrum from high-quality peaks
+if(exists("high_quality_peaks") && nrow(high_quality_peaks) > 0) {
+  
+  pseudo_spectrum <- ms2_specs_extended |> 
+    filter(grouped_mz %in% high_quality_peaks$grouped_mz) |> 
+    group_by(grouped_mz) |> 
+    summarise(
+      mz = mean(mz),
+      total_intensity = sum(int),
+      .groups = "drop"
+    ) |> 
+    arrange(mz)
+  
+  # Create spectrum plot
+  spectrum_plot <- pseudo_spectrum |>
+    ggplot(aes(x = mz, y = total_intensity)) +
+    geom_segment(aes(x = mz, xend = mz, y = 0, yend = total_intensity), 
+                 color = "steelblue", size = 0.8) +
+    labs(
+      title = "Consolidated Pseudo-DDA Spectrum",
+      x = "m/z",
+      y = "Summed Intensity",
+      caption = paste("Spectrum contains", nrow(pseudo_spectrum), "high-quality peaks")
+    ) +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 8),
+      plot.title = element_text(size = 8),
+      axis.text = element_text(size = 7),
+      plot.caption = element_text(size = 6)
+    )
+  
+  print(spectrum_plot)
+  
+  # Summary statistics
+  cat("\n=== PSEUDO-DDA SUMMARY ===\n")
+  cat("Total peaks in pseudo-spectrum:", nrow(pseudo_spectrum), "\n")
+  cat("m/z range:", round(min(pseudo_spectrum$mz), 2), "-", round(max(pseudo_spectrum$mz), 2), "\n")
+  cat("Intensity range:", round(min(pseudo_spectrum$total_intensity), 0), "-", 
+      round(max(pseudo_spectrum$total_intensity), 0), "\n")
+}
+
+```
+
+
+#### save the pseudo spectrum to mgf (not tested!)
+
+```{r}
+library(Spectra)
+
+# Create a Spectra object
+spd <- DataFrame(
+  msLevel = 2L,
+  rtime = 376.269, #features_of_interest$rtmed,
+  precursorMz = 271.2061# features_of_interest$mzmed  # Add if you know it
+)
+
+spd$mz <- list(pseudo_spectrum$mz)
+i <- pseudo_spectrum$total_intensity
+spd$intensity <- list(1000*(i-min(i))/(max(i)-min(i)))
+
+spec <- Spectra(spd)
+
+# Export to MGF
+export(spec, backend = MsBackendMzR(), file = "C:/Users/au557424/Aarhus universitet/output.mgf")
+```
+
+
+
+## Protocol Summary
+
+The **carpeDIAMS** workflow follows these key steps:
+
+1. **Data Loading**: Import mzML files and create sample metadata
+2. **XCMS Processing**: Standard peak detection, grouping, and retention time alignment
+3. **Feature Selection**: Identify suitable features for pseudo-DDA conversion
+4. **MS2 Extraction**: Extract MS2 information for selected features
+5. **Peak Grouping**: Group similar m/z values across samples using agglomerative clustering
+6. **Correlation Analysis**: Calculate elution and sample correlations to assess peak quality
+7. **Quality Filtering**: Select high-quality peaks based on correlation thresholds
+8. **Spectrum Consolidation**: Create final pseudo-DDA spectra from filtered peaks
+
+## Key Parameters
+
+- **minInt**: Minimum intensity threshold for MS2 peaks (default: 500)
+- **Elution correlation threshold**: Minimum correlation between MS1 and MS2 elution profiles (default: 0.3)
+- **Sample correlation threshold**: Minimum correlation between MS1 and MS2 across samples (default: 0.8)
+- **m/z tolerance**: Tolerance for grouping similar m/z values (default: 0.001 Da)
+
+This approach enables the extraction of pseudo-DDA spectra from DIA data while maintaining high confidence through correlation-based quality control.
+
+
+```{r}
+
+sps <- Spectra(backend = MsBackendMsp::MsBackendMsp(), 
+               file = "MS_library - LC-MS pos.msp")
+
+sps <- sps[unique(sps$Name) |> sapply(FUN = \(x){which(x==sps$Name)[1]})]
+```
+
+
+
+# Full pipeline
+```{r}
+
+fd <- featureDefinitions(object)
+
+start <- Sys.time()
+
+spectra <-
+  seq_along(sps$Name) |> 
+  map(~{
+  
+  example <- sps[sps$Name == sps$Name[.x]]
+  
+  mz_of_interest <- example@backend@spectraData$precursorMz
+  rt_of_interest <- as.numeric(example@backend@spectraData$RT)*60
+  
+  features_of_interest <- 
+    fd |> as_tibble(rownames = "feature") |> 
+    filter(abs(mzmed-mz_of_interest[1])<0.001,
+           abs(rtmed-rt_of_interest[1])<10)
+  
+  if (nrow(features_of_interest)==0){
+    return("No peak found in MS1")
+  }
+  
+  # Get backend peaks for each feature
+  feature_peaks <- getBackendPeaks(object, fd = features_of_interest)
+  filenames <- fileNames(object)
+  spectra_df <- spectra(object)@backend@spectraData@listData |> bind_cols()
+  
+  # Extract scan information for selected features
+  scan_info <- feature_peaks |> map(extractScanInfo, filenames, spectra_df, .progress = TRUE)
+  
+  # Show example of a single peak's scan information
+  single_peak <- scan_info[[1]] # We just select the first feature, if there are multiple, change the 1 accordingly to the index
+  
+  # Set parameters for pseudo-DDA conversion
+  minInt <- 1000  # Minimum intensity threshold
+  
+  # Generate pseudo-raw MS2 spectra for each sample
+  ms2_specs <- 
+    single_peak |> 
+    map(Ms2PseudoRaw, minInt = minInt, maxDiff = 0.001) |> 
+    set_names(single_peak |> map_chr(~.x$filename)) |> 
+    bind_rows(.id = "file")
+  
+  # Add scan and file information for grouping
+  ms2_specs_extended <- 
+    ms2_specs |> 
+    mutate(file_scan = paste0(basename(file))) |> 
+    group_by(groups, file_scan) |> 
+    mutate(mz_g1 = mean(mz)) |> 
+    ungroup()
+  
+  
+  # Group peaks with similar m/z values across all samples
+  ms2_specs_extended$grouped_mz <- groupMultiple(
+    mz = ms2_specs_extended$mz_g1, 
+    int = ms2_specs_extended$int, 
+    id = ms2_specs_extended$file_scan,
+    maxDiff = 0.01
+  )
+  
+  ms2_specs_extended <- ms2_specs_extended |> group_by(grouped_mz) |> mutate(mz_g2 = mean(mz))
+  
+  # Calculate elution profile correlations (MS1 vs MS2 across retention time)
+  elution_correlation <- 
+    ms2_specs_extended |> 
+    filter(!is.na(ms1_int)) |> 
+    mutate(file_base = gsub("[.]mzML.*", "", basename(file))) |>
+    group_by(grouped_mz, file_base) |> 
+    summarise(
+      elution_cor = cor(log10(1 + int), log10(1 + ms1_int), use = "complete.obs"),
+      ms1_total = sum(ms1_int, na.rm = TRUE),
+      ms2_total = sum(int, na.rm = TRUE),
+      n_scans = n(),
+      mz_g2 = mz_g2[1],
+      mz_g1 = mz_g1[1],
+      mz = mean(mz, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  #
+  
+  # Calculate sample correlations (MS1 vs MS2 across samples)
+  correlation_summary <- 
+    elution_correlation |>
+    filter(n_scans > 5) |> 
+    group_by(grouped_mz) |> 
+    summarise(
+      sample_cor = cor(log10(ms1_total + 1), log10(ms2_total + 1)),
+      n_samples = n(),
+      mean_elution_cor = mean(elution_cor, na.rm = TRUE),
+      mz = mz[1],
+      .groups = "drop"
+    )
+  
+  elution_threshold <- 0.8
+  sample_threshold <- 0.8
+  
+  # Select high-quality peaks
+  high_quality_peaks <- correlation_summary |> 
+    filter(mean_elution_cor > elution_threshold | sample_cor > sample_threshold) |> 
+    arrange(desc(mean_elution_cor))
+  
+  print(paste("Selected", nrow(high_quality_peaks), "high-quality peaks"))
+  
+  # Select a specific peak for detailed visualization
+  if(nrow(high_quality_peaks) > 0) {
+    selected_group <- high_quality_peaks$grouped_mz[3]  # Select 4th best peak
+    selected_mz <- high_quality_peaks$mz[3]
+    
+    pseudo_spectrum <- ms2_specs_extended |> 
+      filter(grouped_mz %in% high_quality_peaks$grouped_mz) |> 
+      group_by(grouped_mz) |> 
+      summarise(
+        mz = mean(mz),
+        total_intensity = sum(int),
+        .groups = "drop"
+      ) |> 
+      arrange(mz)
+    print(paste("Analyzing peak at m/z =", round(selected_mz, 4)))
+  }
+  
+  
+  # Create a Spectra object
+  spd <- DataFrame(
+    msLevel = 2L,
+    rtime = features_of_interest$rtmed,
+    compound_name = sps$Name[.x],
+    precursorMz = features_of_interest$mzmed  # Add if you know it
+  )
+  
+  spd$mz <- list(pseudo_spectrum$mz)
+  i <- pseudo_spectrum$total_intensity
+  spd$intensity <- list(1000*(i-min(i))/(max(i)-min(i)))
+  
+  return(Spectra(spd))
+}, .progress=T)
+end <- Sys.time()
+
+print(paste0("time used: ", end-start))
+
+
+export(spec, backend = MsBackendMgf::MsBackendMgf(), file = "my_spectra.mgf")
+spectra |> map_lgl(is.character) |> mean()
+
+scores <- c()
+counts <- c()
+plots <- list()
+for (id in seq_along(spectra)){
+  if (is.character(spectra[[id]])){
+    scores <- c(scores, NA)
+    counts <- c(counts, NA)
+    plots[[length(plots)+1]] <- NA
+    next
+    }
+  #scores <- c(scores, compareSpectra(spectra[[id]][1], sps[id], fun = MsCoreUtils::ndotProduct()))
+  scores <- c(scores, gnpsScore(query = spectra[[id]][1], target = sps[id], tolerance = 0.01)$score)
+  counts <- c(counts, gnpsScore(query = spectra[[id]][1], target = sps[id], tolerance = 0.01)$n_matches)
+  }
+
+tibble(scores, counts) |> ggplot(aes(x=scores, y=counts))+geom_point()
+tibble(scores, counts) |> filter(!is.na(scores)) |> filter(scores > 0.6, counts > 4) |> ggplot(aes(x=scores, y=counts))+geom_point()
+plotSpectraMirror(spectra[[id]], sps[id],
+     ppm = 50, main = "dia vs dda", print=F)
+score <- compareSpectra(spectra[[id]], sps[id], fun = MsCoreUtils::dotProduct)
+
+
+for (i in seq_along(spectra)) {
+  if (is.character(spectra[[i]])) next
+  spectra[[i]]$adduct <- "[M+H]+"
+  spectra[[i]]$ionMode <- "positive"
+  spectra[[i]]$charge <- 1L
+  spectra[[i]]$title <- paste0("Compound_", i)
+}
+
+combined_spectra <- do.call(c, spectra[!(spectra |> map_lgl(is.character))])
+export(combined_spectra, backend = MsBackendMgf::MsBackendMgf(), file = "my_spectra.mgf")
+
+sps$Name[31]
+
+plotSpectraMirror(spectra[[31]][1], sps[31],
+     ppm = 50, main = "dia vs dda")
+
+```
+
+
+```{r}
+library(Spectra)
+
+gnpsScore <- function(query, target, tolerance = 0.02) {
+  mz_q <- mz(query) |> unlist()
+  int_q <- intensity(query)  |> unlist()
+  
+  mz_t <- mz(target) |> unlist()
+  int_t <- intensity(target) |> unlist()
+  
+  # Find matches: for hver peak i query, find nærmeste peak i target
+  matched_q <- c()
+  matched_t <- c()
+  
+  for (i in seq_along(mz_q)) {
+    diffs <- abs(mz_t - mz_q[i])
+    min_diff <- min(diffs)
+    if (min_diff <= tolerance) {
+      j <- which.min(diffs)
+      matched_q <- c(matched_q, i)
+      matched_t <- c(matched_t, j)
+    }
+  }
+  
+  if (length(matched_q) == 0) {
+    return(data.frame(
+      n_matches = 0,
+      score = NA_real_
+    ))
+  }
+  
+  int_q_matched <- int_q[matched_q]
+  int_t_matched <- int_t[matched_t]
+  
+  # Cosine similarity
+  score <- sum(int_q_matched * int_t_matched) /
+           (sqrt(sum(int_q_matched^2)) * sqrt(sum(int_t_matched^2)))
+  
+  return(data.frame(
+    n_matches = length(matched_q),
+    score = score
+  ))
+}
+
+
+
+
+n = 1
+gnpsScore(query = spectra[[great_matches[n]]][1], target = sps[great_matches[n]], tolerance = 0.01)
+plotSpectraMirror(spectra[[great_matches[n]]][1], sps[great_matches[n]],
+     ppm = 50, main = "dia vs dda")
+sps$Name[great_matches[n]]
+n = n+1
+```
+
+
+```{r}
+sps <- Spectra(backend = MsBackendMsp::MsBackendMsp(), 
+               file = "MoNA-export-LC-MS-MS_Positive_Mode.msp")
+
+n=8
+great_matches <- which(((counts>3)&(counts<10)&(scores>0.6)))
+match_info <- 
+  seq_along(sps) |> 
+  map_dfr(
+   ~{gnpsScore(query = spectra[[great_matches[n]]][1], target = sps[.x], tolerance = 0.01)} 
+  )
+  
+top_matches <- 
+  match_info |>
+  rowid_to_column() |> 
+  mutate(precurserMz = sps[great_matches[n]]@backend@spectraData@listData$precursorMz,
+         matchPrecurserMz = sps[rowid]@backend@spectraData@listData$precursorMz) |> 
+  filter(n_matches > 2, score > 0.6, abs(precurserMz-matchPrecurserMz)<0.01) |> 
+  arrange(-n_matches, -score) |> 
+  slice_head(n=10) 
+
+great_matches[n]
+sps$Name[great_matches[n]]
+
+sps$Name[top_matches$rowid[1]]
+plotSpectraMirror(spectra[[great_matches[n]]][1], sps[top_matches$rowid[1]],
+     ppm = 50, main = "dia vs dda")
+sps$Name[top_matches$rowid[2]]
+plotSpectraMirror(spectra[[great_matches[n]]][1], sps[top_matches$rowid[2]],
+     ppm = 50, main = "dia vs dda")
+sps$Name[top_matches$rowid[3]]
+plotSpectraMirror(spectra[[great_matches[n]]][1], sps[top_matches$rowid[3]],
+     ppm = 50, main = "dia vs dda")
+sps$Name[top_matches$rowid[4]]
+plotSpectraMirror(spectra[[great_matches[n]]][1], sps[top_matches$rowid[4]],
+     ppm = 50, main = "dia vs dda")
+
+
+sps[great_matches[n]]@backend@spectraData
+sps[top_matches$rowid[1]]@backend@spectraData
+sps[536]@backend@spectraData
+
+spectra[[26]]@backend@spectraData
+
+```
+
+
+
+
+```{r}
+sps <- Spectra(backend = MsBackendMsp::MsBackendMsp(), 
+               file = "MoNA-export-LC-MS-MS_Positive_Mode.msp")
+
+fl <- "MoNA-export-LC-MS-MS_Positive_Mode.sdf"
+cmps <- compound_tbl_sdf(fl)
+metad <- CompoundDb::make_metadata(source = "MoNA", source_version = "0.3",
+    source_date = NA, organism = "Hsapiens", url = "https://mona.fiehnlab.ucdavis.edu/downloads")
+db_f <- createCompDb(cmps, metadata = metad, path = tempdir())
+
+db_file <- createCompDb(cmps, metadata = metad, overwrite=T,
+                        path = tempdir())
+
+
+n=8
+great_matches <- which(((counts>10)&(scores>0.6)))
+match_info <- 
+  seq_along(sps) |> 
+  map_dfr(
+   ~{gnpsScore(query = spectra[[23]][1], target = sps[.x], tolerance = 0.01)},.progress=T
+  )
+  
+top_matches <- 
+  match_info |>
+  rowid_to_column() |> 
+  mutate(precurserMz = sps[great_matches[n]]@backend@spectraData@listData$precursorMz,
+         matchPrecurserMz = sps[rowid]@backend@spectraData@listData$precursorMz) |> 
+  filter(n_matches > 2, score > 0.6, abs(precurserMz-matchPrecurserMz)<0.01) |> 
+  arrange(-n_matches, -score) |> 
+  slice_head(n=10) 
+
+great_matches[n]
+sps$Name[great_matches[n]]
+
+sps$Name[top_matches$rowid[1]]
+plotSpectraMirror(spectra[[great_matches[n]]][1], sps[top_matches$rowid[1]],
+     ppm = 50, main = "dia vs dda")
+sps$Name[top_matches$rowid[2]]
+plotSpectraMirror(spectra[[great_matches[n]]][1], sps[top_matches$rowid[2]],
+     ppm = 50, main = "dia vs dda")
+sps$Name[top_matches$rowid[3]]
+plotSpectraMirror(spectra[[great_matches[n]]][1], sps[top_matches$rowid[3]],
+     ppm = 50, main = "dia vs dda")
+sps$Name[top_matches$rowid[4]]
+plotSpectraMirror(spectra[[great_matches[n]]][1], sps[top_matches$rowid[4]],
+     ppm = 50, main = "dia vs dda")
+
+
+sps[great_matches[n]]@backend@spectraData
+sps[top_matches$rowid[1]]@backend@spectraData
+sps[536]@backend@spectraData
+
+spectra[[26]]@backend@spectraData
+
+```
+
+
+
+```{r}
+library(httr)
+library(jsonlite)
+
+usi <- "mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00005436077"
+url <- paste0("https://metabolomics-usi.gnps2.org/api/spectrum?usi=", URLencode(usi))
+url <- "https://metabolomics-usi.gnps2.org/json/?usi1=mzspec%3AGNPS%3AGNPS-LIBRARY%3Aaccession%3ACCMSLIB00005436077"
+url <- "mzspec:MSV000089306:raw/Phoenicin switch 2/JVC00907.mzML:scan:4294967295"
+
+base_api <- "https://metabolomics-usi.gnps2.org/json/?usi1="
+
+
+https://metabolomics-usi.gnps2.org/json/?usi1=mzspec%3AGNPS%3AGNPS-LIBRARY%3Aaccession%3ACCMSLIB00005436077
+# Your USI
+usi <- "mzspec:MSV000089306:raw/Phoenicin switch 2/JVC00907.mzML:scan:4294967295"
+
+# Build the API URL
+url <- paste0("https://metabolomics-usi.gnps2.org/json/?usi=", URLencode(usi))
+
+# Fetch the spectrum
+res <- GET(url)
+
+# Parse the JSON response
+spec_data <- fromJSON(content(res, "text"))
+
+# Access m/z and intensity
+mz <- spec_data$peaks[,1]
+intensity <- spec_data$peaks[,2]
+
+# Create a Spectra object
+spd <- DataFrame(
+  msLevel = 2L,
+  rtime = NA_real_,
+  compound_name = NA_character_,
+  precursorMz = spec_data$precursor_mz  # Add if you know it
+)
+
+spd$mz <- list(mz)
+i <- intensity
+spd$intensity <- list(1000*(i-min(i))/(max(i)-min(i)))
+
+
+# Create a Spectra object
+spd <- DataFrame(
+  msLevel = 2L,
+  rtime = features_of_interest$rtmed,
+  precursorMz = features_of_interest$mzmed  # Add if you know it
+)
+
+spd$mz <- list(pseudo_spectrum$mz)
+i <- pseudo_spectrum$total_intensity
+spd$intensity <- list(1000*(i-min(i))/(max(i)-min(i)))
+
+spec <- Spectra(spd)
+```
+
+

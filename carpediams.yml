@@ -1,0 +1,84 @@
+name: carpediams_dev
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - r-base=4.4
+  - r-essentials
+
+  # ── Bioconductor ──────────────────────────────────────────────
+  - bioconductor-spectra
+  - bioconductor-xcms
+  - bioconductor-msnbase
+  - bioconductor-mzr
+  - bioconductor-biocparallel
+  - bioconductor-biocgenerics
+  - bioconductor-s4vectors
+  - bioconductor-iranges
+  - bioconductor-biocstyle          # vignette styling
+  - bioconductor-bioccheck          # package checking (Bioconductor rules)
+
+  # ── Arrow / DuckDB ────────────────────────────────────────────
+  - r-arrow
+  - r-duckdb
+  - r-dbi
+
+  # ── Package development ───────────────────────────────────────
+  - r-devtools
+  - r-usethis
+  - r-roxygen2
+  - r-testthat
+  - r-covr
+  - r-pkgdown
+  - r-pkgbuild
+  - r-pkgload
+  - r-rcpp
+  - r-rcpparmadillo
+  - r-rlang
+  - r-remotes
+  - r-desc
+  - r-available
+  - r-goodpractice
+
+  # ── Vignette / R Markdown ─────────────────────────────────────
+  - r-rmarkdown
+  - r-knitr
+  - r-kableextra
+  - r-bookdown
+  - pandoc                           # system-level, needed by rmarkdown
+
+  # ── Argument parsing (CLI scripts) ────────────────────────────
+  - r-argparse
+  - r-optparse
+  - r-docopt
+
+  # ── Tidyverse + data wrangling (pulled by many deps anyway) ───
+  - r-tidyverse
+  - r-data.table
+  - r-glue
+  - r-fs
+  - r-cli
+  - r-crayon
+  - r-withr
+  - r-here
+
+  # ── Parallel / HPC ────────────────────────────────────────────
+  - r-future
+  - r-future.apply
+  - r-furrr
+  - r-parallelly
+
+  # ── Utilities ─────────────────────────────────────────────────
+  - r-jsonlite
+  - r-yaml
+  - r-httr2
+  - r-curl
+  - r-digest
+  - r-checkmate                      # argument validation
+
+  # ── Build tools ───────────────────────────────────────────────
+  - make
+  - compilers                        # c/c++/fortran via conda-forge
+  - cmake
+  - pkg-config

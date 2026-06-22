@@ -1,0 +1,29 @@
+Package: carpeDIAMS
+Title: Consensus MS2 Spectrum Extraction from PASEF/bbCID Data
+Version: 0.1.0
+Authors@R: 
+    person("Johan", "Lassen", email = "johan@example.com", role = c("aut", "cre"))
+Description: Intensity-adaptive centroiding (IAAC) and consensus MS2 spectrum
+    extraction from Bruker timsTOF PASEF and bbCID data.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Imports:
+    Rcpp,
+    reticulate,
+    xcms,
+    Spectra,
+    data.table,
+    arrow,
+    dplyr,
+    purrr,
+    tibble,
+    tidyr,
+    DBI,
+    duckdb
+Suggests:
+    ggplot2,
+    ggrepel,
+    cowplot
+LinkingTo: Rcpp
+SystemRequirements: Python (>= 3.8), apricot-select, numpy
+Config/roxygen2/version: 8.0.0
