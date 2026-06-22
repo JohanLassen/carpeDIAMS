@@ -1,0 +1,15 @@
+# R / package
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.o
+*.so
+*.dll
+inst/doc
+# editors
+.vscode/
+# data you don't want in git
+*.msp
+*.rds
+hdf5/
