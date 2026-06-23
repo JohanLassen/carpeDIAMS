@@ -1,13 +1,14 @@
-  #' carpeDIAMS: DIA to pseudo-DDA spectra
-  #'
-  #' Turns DIA (bbCID) acquisitions into pseudo-DDA spectra by correlating MS1
-  #' elution with MS2 fragment elution across many samples. Produces an MGF
-  #' that downstream library/annotation tools consume.
-  #'
-  #' @keywords internal
-  #' @useDynLib carpeDIAMS, .registration = TRUE
-  #' @importFrom Rcpp sourceCpp
-  "_PACKAGE"
+#' carpeDIAMS: DIA to pseudo-DDA spectra
+#'
+#' Turns DIA (bbCID) acquisitions into pseudo-DDA spectra by correlating MS1
+#' elution with MS2 fragment elution across many samples. Produces an MGF
+#' that downstream library/annotation tools consume.
+#'
+#' @keywords internal
+#' @useDynLib carpeDIAMS, .registration = TRUE
+#' @importFrom Rcpp sourceCpp
+#' @importFrom data.table data.table := .I .SD setDT setkey
+"_PACKAGE"
 
 utils::globalVariables(c(
   # data.table NSE

@@ -13,3 +13,4 @@ inst/doc
 *.msp
 *.rds
 hdf5/
+tmp/
