@@ -141,8 +141,7 @@ Ms2PseudoRaw <- function(
   rm(spectra_object); gc()
 
   if (length(b) == 0) return(NULL)
-
-  pks_list <- Spectra::peaksData(b)
+  pks_list <- Spectra::peaksData(b) |> as.list()
   n_peaks  <- vapply(pks_list, nrow, integer(1))
   pks_matrix <- do.call(rbind, pks_list)
   all_ms <- tibble::tibble(
@@ -152,7 +151,7 @@ Ms2PseudoRaw <- function(
     mslevel = rep(Spectra::msLevel(b), n_peaks)
   )
   rm(b, pks_list, pks_matrix); gc()
-
+  
   # 2. CREATE THE POOL: All unique MS2 fragments for this sample
   # We only save this ONCE per sample. No duplication.
   ms2_pool <- all_ms |>

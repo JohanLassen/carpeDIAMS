@@ -14,7 +14,7 @@ setup_connection <- function(file_directory) {
   # Use a local temp dir for DuckDB spill files to avoid /tmp exhaustion on shared nodes
   tmp_dir <- file.path(abs_dir, ".duckdb_tmp")
   dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
-  con <- DBI::dbConnect(duckdb(), config = list(temp_directory = tmp_dir))
+  con <- DBI::dbConnect(duckdb::duckdb(), config = list(temp_directory = tmp_dir))
   DBI::dbExecute(con, sprintf(
     "CREATE OR REPLACE VIEW pointers AS SELECT * FROM read_parquet('%s/*_pointers.parquet')", 
     abs_dir
@@ -64,7 +64,7 @@ batch_get_feature_data <- function(feature_ids, con, chunk_size = 500) {
       WHERE (m.mz <= p.mz_target + 2 OR m.mz IS NULL)
       ORDER BY p.feature, p.sample, p.scan
     ", id_list)
-    data.table::as.data.table(dbGetQuery(con, query))
+    data.table::as.data.table(DBI::dbGetQuery(con, query))
   }))
   
   return(results)
@@ -159,25 +159,21 @@ process_pseudo_spec <- function(
 #' Apply self-peak filter and top-N selection to per-group correlations
 #'
 #' Removes the precursor self-peak (within `ms1_ppm`, skipped when `<= 0`),
-#' then keeps the top `cor_count` groups by correlation, then the top
-#' `fdr_count` of those by FDR — matches the notebook's two-stage ranking.
+#' then keeps the top `cor_thresh` groups by correlation, then the top
+#' `fdr_thresh` of those by FDR — matches the notebook's two-stage ranking.
 #'
 #' @param correlations `data.table` from `process_pseudo_spec()$correlations`.
 #' @param mz_target Numeric. Precursor m/z.
 #' @param ms1_ppm Numeric. Tolerance for self-peak filter; `<= 0` skips.
-#' @param cor_count Integer. Keep top-N by correlation.
-#' @param fdr_count Integer. Then keep top-N of those by FDR.
+#' @param cor_thresh Integer. Keep top-N by correlation.
+#' @param fdr_thresh Integer. Then keep top-N of those by FDR.
 #' @return A `data.table` (possibly empty).
 #' @export
-select_pseudo_spec <- function(correlations, mz_target, ms1_ppm, cor_count, fdr_count) {
+select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05) {
   if (nrow(correlations) == 0) return(correlations)
   out <- correlations
-  if (!is.na(ms1_ppm) && ms1_ppm > 0) {
-    out <- out[abs(fragment_mz - mz_target) / mz_target * 1e6 > ms1_ppm]
-  }
-  if (nrow(out) == 0) return(out)
-  out <- out[order(-correlation)][seq_len(min(cor_count, .N))]
-  out <- out[order(fdr)][seq_len(min(fdr_count, .N))]
+  out <- out[correlation >= cor_thresh]
+  out <- out[fdr <= fdr_thresh]
   out
 }
 
@@ -237,34 +233,6 @@ select_pseudo_spec <- function(correlations, mz_target, ms1_ppm, cor_count, fdr_
   list(p_corr = p_corr, p_spec = p_spec, p_ms1 = p_ms1, p_eic = p_eic)
 }
 
-#' Write a single-feature MGF block (concat-friendly)
-#'
-#' Each file is a complete `BEGIN IONS ... END IONS` — merge with
-#' `cat <dir>/*.mgf > combined.mgf`.
-#'
-#' @param pseudo_spec Output of [select_pseudo_spec()] (or a subset).
-#' @param mz_target Numeric. Precursor m/z.
-#' @param feature_id Used as `TITLE=`.
-#' @param path Output `.mgf` path.
-#' @param rt Optional retention time (seconds); skipped when `NA`.
-#' @return Invisibly `path`, or `NULL` when `pseudo_spec` is empty.
-#' @export
-write_simple_mgf <- function(pseudo_spec, mz_target, feature_id, path,
-                             rt = NA_real_) {
-  if (is.null(pseudo_spec) || nrow(pseudo_spec) == 0) return(invisible(NULL))
-  ord <- order(pseudo_spec$fragment_mz)
-  body <- sprintf("%.4f %.0f", pseudo_spec$fragment_mz[ord], pseudo_spec$int[ord])
-  header <- c(
-    "BEGIN IONS",
-    sprintf("TITLE=%s", feature_id),
-    sprintf("PEPMASS=%.4f", mz_target),
-    if (!is.na(rt)) sprintf("RTINSECONDS=%.2f", rt) else NULL,
-    "CHARGE=1+"
-  )
-  writeLines(c(header, body, "END IONS", ""), path)
-  invisible(path)
-}
-
 #' Clean pseudo-spectra for many features (main batch entry)
 #'
 #' Orchestrates: connect → fetch → per-feature [process_pseudo_spec()] →
@@ -277,7 +245,7 @@ write_simple_mgf <- function(pseudo_spec, mz_target, feature_id, path,
 #'   `mzmed` and `rtmed` per target.
 #' @param con Optional pre-opened connection (else opened + closed internally).
 #' @param ms1_ppm,ms2_ppm Numeric ppm tolerances.
-#' @param buffer,fdr_count,cor_count,min_count Tunables passed downstream.
+#' @param buffer,fdr_thresh,cor_thresh,min_count Tunables passed downstream.
 #' @param report,report_path PDF diagnostic report on/off + path.
 #' @param mgf_dir Optional directory for per-feature MGFs.
 #' @param fetch_chunk_size Features per DuckDB query.
@@ -292,8 +260,8 @@ clean_pseudo_spectra <- function(
   ms1_ppm          = 0,
   grouper          = ppm_upgma(ppm = 30),
   buffer           = 50L,
-  fdr_count        = 30L,
-  cor_count        = 100L,
+  fdr_thresh       = 0.01,
+  cor_thresh       = 0.3,
   min_count        = 10L,
   report           = TRUE,
   report_path      = "pseudo_specs_report.pdf",
@@ -318,6 +286,10 @@ clean_pseudo_spectra <- function(
   if (!is.null(fd)) {
     fd_df <- as.data.frame(fd)
     if ("feature_id" %in% colnames(fd_df)) rownames(fd_df) <- fd_df$feature_id
+      if (!"mzmed" %in% colnames(fd_df) && "mz" %in% colnames(fd_df))
+    fd_df$mzmed <- fd_df$mz
+    if (!"rtmed" %in% colnames(fd_df) && "rt" %in% colnames(fd_df))
+      fd_df$rtmed <- fd_df$rt
   }
   has_fd <- !is.null(fd_df)
 
@@ -354,8 +326,8 @@ clean_pseudo_spectra <- function(
       )
       if (is.null(out) || nrow(out$correlations) == 0) return(NULL)
 
-      pseudo_spec <- select_pseudo_spec(out$correlations, mz_target,
-                                        ms1_ppm, cor_count, fdr_count)
+      pseudo_spec <- select_pseudo_spec(out$correlations, cor_thresh, fdr_thresh)
+
       if (nrow(pseudo_spec) == 0) return(NULL)
 
       if (report) {
@@ -395,7 +367,8 @@ clean_pseudo_spectra <- function(
         n_samples       = as.integer(pseudo_spec$n_samples),
         count           = as.integer(pseudo_spec$count),
         r               = pseudo_spec$correlation,
-        t_stat          = NA_real_,
+        t_stat          = pseudo_spec$correlation * sqrt(pseudo_spec$count - 2) /
+         sqrt(1 - pseudo_spec$correlation^2),
         p_value         = pseudo_spec$p_value,
         fdr             = pseudo_spec$fdr,
         feature_id      = target

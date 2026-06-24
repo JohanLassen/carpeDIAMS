@@ -1,0 +1,22 @@
+#!/usr/bin/env Rscript
+suppressPackageStartupMessages({ library(carpeDIAMS); library(optparse) })
+
+opt <- parse_args(OptionParser(option_list = list(
+  make_option("--input",    type = "character", help = "Input mzML file"),
+  make_option("--outdir",   type = "character", default = ".", help = "Output dir"),
+  make_option("--ppm",      type = "double",    default = 12),
+  make_option("--ion-mode", type = "character", default = "POSITIVE"),
+  make_option("--rt-min",   type = "double",    default = 30),
+  make_option("--rt-max",   type = "double",    default = 1200)
+)))
+
+if (is.null(opt$input)) stop("--input is required", call. = FALSE)
+
+single_mzml(
+  path = opt$input, tmp_dir = opt$outdir,
+  rt_range = c(opt$`rt-min`, opt$`rt-max`),
+  cwp = CentWaveParam(ppm = opt$ppm, peakwidth = c(2,30),
+                      snthresh = 6, prefilter = c(3,1000), mzdiff = 0.01)
+)
+
+
