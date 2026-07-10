@@ -92,9 +92,18 @@ get_scans_optimized <- function(feature_id, dataOrigin, rtmin, rtmax, rt, sample
 #'   `Spectra::spectra(msobject)@backend@spectraData@listData |> dplyr::bind_cols()`.
 #' @return Tibble: `sample, filename, mz, feature, scan_indices, apex_scan_index, n_scans`.
 #' @export
-extractScanInfo <- function(feature_peaks, filenames, spectra_df){
+extractScanInfo <- function(feature_peaks, filenames, spectra_df, target_list = FALSE){
 
   spectra_list <- split(spectra_df, spectra_df$dataOrigin)
+
+  if (target_list){
+    out <- feature_peaks |>
+      purrr::map_dfr(tibble::as_tibble, .id = "feature_id") |>
+      dplyr::mutate(dataOrigin = filenames[sample]) |>
+      dplyr::select(feature_id, dataOrigin, rtmin, rtmax, rt, sample, mz) |>
+      purrr::pmap_dfr(get_scans_optimized, spectra_list, .progress = TRUE)
+    return(out)
+  }
 
   out <- feature_peaks |>
      purrr::map_dfr(tibble::as_tibble, .id = "feature_id") |>
