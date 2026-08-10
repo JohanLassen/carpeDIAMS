@@ -4,7 +4,7 @@
 \alias{extractScanInfo}
 \title{Map feature peaks to scan indices in the Spectra backend}
 \usage{
-extractScanInfo(feature_peaks, filenames, spectra_df)
+extractScanInfo(feature_peaks, filenames, spectra_df, target_list = FALSE)
 }
 \arguments{
 \item{feature_peaks}{Output of [getBackendPeaks()].}

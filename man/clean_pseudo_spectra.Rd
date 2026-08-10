@@ -12,8 +12,8 @@ clean_pseudo_spectra(
   ms1_ppm = 0,
   grouper = ppm_upgma(ppm = 30),
   buffer = 50L,
-  fdr_count = 30L,
-  cor_count = 100L,
+  fdr_thresh = 0.01,
+  cor_thresh = 0.3,
   min_count = 10L,
   report = TRUE,
   report_path = "pseudo_specs_report.pdf",
@@ -34,7 +34,7 @@ clean_pseudo_spectra(
 
 \item{ms1_ppm, ms2_ppm}{Numeric ppm tolerances.}
 
-\item{buffer, fdr_count, cor_count, min_count}{Tunables passed downstream.}
+\item{buffer, fdr_thresh, cor_thresh, min_count}{Tunables passed downstream.}
 
 \item{report, report_path}{PDF diagnostic report on/off + path.}
 

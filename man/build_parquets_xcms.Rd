@@ -4,7 +4,15 @@
 \alias{build_parquets_xcms}
 \title{Build pool + pointer parquets for one sample, from a subsetted msobject}
 \usage{
-build_parquets_xcms(mssubset, fd, out_dir, sample_id, include_quantile = 0.9)
+build_parquets_xcms(
+  mssubset,
+  fd,
+  out_dir,
+  sample_id,
+  top_n = 10L,
+  ppm = NULL,
+  rt_buffer = 0
+)
 }
 \arguments{
 \item{mssubset}{Output of [subset_samples_xcms()].}
@@ -15,8 +23,15 @@ build_parquets_xcms(mssubset, fd, out_dir, sample_id, include_quantile = 0.9)
 
 \item{sample_id}{Integer. 1-based index into the subsetted msobject.}
 
-\item{include_quantile}{Currently unused; top-10 samples per feature
-are picked by `slice_max(n = 10)`.}
+\item{top_n}{Integer. Keep the top-N samples per feature (by assay
+intensity) — restricts which features get built for this sample.}
+
+\item{ppm}{Numeric or `NULL`. Fragment tolerance in ppm; when set,
+`maxDiff` is derived from `max(scan_info$mz) * ppm * 1e-6`.
+`NULL` keeps the legacy 0.005 Da tolerance.}
+
+\item{rt_buffer}{Numeric. Seconds added to each side of every peak's
+RT window before scan extraction (compensates for alignment jitter).}
 }
 \value{
 Invisibly `NULL`. Writes two parquets to `out_dir`.

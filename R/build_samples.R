@@ -239,8 +239,13 @@ Ms2PseudoRaw <- function(
 #' @param fd `featureDefinitions()` table.
 #' @param out_dir Directory for the two parquets.
 #' @param sample_id Integer. 1-based index into the subsetted msobject.
-#' @param include_quantile Currently unused; top-10 samples per feature
-#'   are picked by `slice_max(n = 10)`.
+#' @param top_n Integer. Keep the top-N samples per feature (by assay
+#'   intensity) — restricts which features get built for this sample.
+#' @param ppm Numeric or `NULL`. Fragment tolerance in ppm; when set,
+#'   `maxDiff` is derived from `max(scan_info$mz) * ppm * 1e-6`.
+#'   `NULL` keeps the legacy 0.005 Da tolerance.
+#' @param rt_buffer Numeric. Seconds added to each side of every peak's
+#'   RT window before scan extraction (compensates for alignment jitter).
 #' @return Invisibly `NULL`. Writes two parquets to `out_dir`.
 #' @export
 build_parquets_xcms <- function(
@@ -248,47 +253,64 @@ build_parquets_xcms <- function(
     fd,
     out_dir,
     sample_id,
-    include_quantile = 0.90
+    top_n     = 10L,
+    ppm       = NULL,
+    rt_buffer = 0
 ) {
-    
-    # Check if output directory exists, if not create it
+
     if (!dir.exists(out_dir)) {
         message("Output directory ", out_dir, " does not exist. Creating...")
         dir.create(out_dir, recursive = TRUE)
     }
 
-    # Load data from the subset
     msobject <- mssubset$msobject
     assay <- mssubset$assay
-    spectra_df <- Spectra::spectra(msobject)@backend@spectraData@listData |> bind_cols()
+    sps_obj <- MsExperiment::spectra(msobject)
+    spectra_df <- as.data.frame(Spectra::spectraData(sps_obj))
     filenames <- xcms::fileNames(msobject)
-    sample_file <- basename(filenames[sample_id]) 
+    sample_file <- basename(filenames[sample_id])
     assay <- tibble::as_tibble(assay, rownames = "name")
     colnames(assay) <- c("name", rownames(fd))
 
-    topX <- 
-        assay |> 
-        tidyr::pivot_longer(cols = -"name", names_to = "feature_id") |> 
-        tidyr::replace_na(list(value = 0)) |> 
-        dplyr::group_by(feature_id) |> 
-        #dplyr::filter(value > quantile(value, include_quantile)) |> 
-        dplyr::slice_max(value, n=10) |> 
-        dplyr::ungroup()  |> 
-        dplyr::filter(name == sample_file) 
+    topX <-
+        assay |>
+        tidyr::pivot_longer(cols = -"name", names_to = "feature_id") |>
+        tidyr::replace_na(list(value = 0)) |>
+        dplyr::group_by(feature_id) |>
+        dplyr::slice_max(value, n = top_n) |>
+        dplyr::ungroup()  |>
+        dplyr::filter(name == sample_file)
 
-    # Make scan info
-    feature_peaks <- getBackendPeaks(msobject, fd = fd, all_peaks = mssubset$peaks, sample_filter = sample_id)
-    scan_info <- extractScanInfo(feature_peaks, filenames, spectra_df) |> dplyr::filter(feature %in% topX$feature_id)
-    
-    current_spectra <- Spectra::spectra(msobject) |> Spectra::filterDataOrigin(scan_info$filename[1])
-    
-    # Clean up large objects
-    rm(mssubset, msobject, assay, spectra_df, filenames, feature_peaks, fd, topX); gc()
+    feature_peaks <- getBackendPeaks(msobject, fd = fd, sample_filter = sample_id)
+    if (rt_buffer > 0) {
+        feature_peaks <- lapply(feature_peaks, function(m) {
+            if (nrow(m) == 0) return(m)
+            m[, "rtmin"] <- m[, "rtmin"] - rt_buffer
+            m[, "rtmax"] <- m[, "rtmax"] + rt_buffer
+            m
+        })
+    }
+    scan_info <- extractScanInfo(feature_peaks, filenames, spectra_df) |>
+        dplyr::filter(feature %in% topX$feature_id)
+
+    if (nrow(scan_info) == 0) {
+        message("Sample ", sample_id, ": no features to build after top_n filter.")
+        return(invisible(NULL))
+    }
+
+    current_spectra <- sps_obj |>
+        Spectra::filterDataOrigin(scan_info$filename[1])
+
+    rm(mssubset, msobject, sps_obj, assay, spectra_df, filenames, feature_peaks, fd, topX); gc()
+
+    max_diff <- if (!is.null(ppm)) {
+        max(scan_info$mz, na.rm = TRUE) * ppm * 1e-6
+    } else 0.005
 
     Ms2PseudoRaw(
-        single_sample = scan_info,
+        single_sample  = scan_info,
         spectra_object = current_spectra,
-        maxDiff = 0.005,
-        output_dir = out_dir
+        maxDiff        = max_diff,
+        output_dir     = out_dir
     )
 }

@@ -4,7 +4,13 @@
 \alias{subset_samples_xcms}
 \title{Subset an XCMSnExp to a representative set of samples (apricot MaxCoverage)}
 \usage{
-subset_samples_xcms(msobject, msassay, subset_size = 100L, q_prob = 0.9)
+subset_samples_xcms(
+  msobject,
+  msassay,
+  subset_size = 100L,
+  q_prob = 0.9,
+  subsample = TRUE
+)
 }
 \arguments{
 \item{msobject}{An `XCMSnExp`.}
@@ -12,9 +18,14 @@ subset_samples_xcms(msobject, msassay, subset_size = 100L, q_prob = 0.9)
 \item{msassay}{Numeric matrix, samples (rows) x features (cols).
 `rownames(msassay)` must match `basename(xcms::fileNames(msobject))`.}
 
-\item{subset_size}{Integer. Number of samples to keep.}
+\item{subset_size}{Integer. Number of samples to keep. Ignored when
+`subsample = FALSE`.}
 
-\item{q_prob}{Numeric in (0, 1). Per-feature presence-threshold quantile.}
+\item{q_prob}{Numeric in (0, 1). Per-feature presence-threshold
+quantile. Ignored when `subsample = FALSE`.}
+
+\item{subsample}{Logical. When `FALSE`, skip apricot and return all
+samples as-is; Python/apricot are not touched.}
 }
 \value{
 A list with elements `msobject`, `assay`, `peaks`.
@@ -22,8 +33,10 @@ A list with elements `msobject`, `assay`, `peaks`.
 \description{
 Picks `subset_size` files from `msobject` that collectively cover the
 largest number of features present above the per-feature `q_prob`
-quantile, using apricot's MaxCoverageSelection via reticulate. The full
-`chromPeaks` table is returned alongside the subsetted msobject because
-downstream `getBackendPeaks()` needs the original peak-row indexing
-(`peakidx` from the parent featureDefinitions).
+quantile, using apricot's MaxCoverageSelection via reticulate. With
+`subsample = FALSE`, returns all samples unchanged (still wrapped in
+the same list shape downstream expects). The full `chromPeaks` table
+is returned alongside the msobject because downstream
+`getBackendPeaks()` needs the original peak-row indexing (`peakidx`
+from the parent featureDefinitions).
 }

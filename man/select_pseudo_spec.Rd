@@ -4,24 +4,24 @@
 \alias{select_pseudo_spec}
 \title{Apply self-peak filter and top-N selection to per-group correlations}
 \usage{
-select_pseudo_spec(correlations, mz_target, ms1_ppm, cor_count, fdr_count)
+select_pseudo_spec(correlations, cor_thresh = 0.5, fdr_thresh = 0.05)
 }
 \arguments{
 \item{correlations}{`data.table` from `process_pseudo_spec()$correlations`.}
 
+\item{cor_thresh}{Integer. Keep top-N by correlation.}
+
+\item{fdr_thresh}{Integer. Then keep top-N of those by FDR.}
+
 \item{mz_target}{Numeric. Precursor m/z.}
 
 \item{ms1_ppm}{Numeric. Tolerance for self-peak filter; `<= 0` skips.}
-
-\item{cor_count}{Integer. Keep top-N by correlation.}
-
-\item{fdr_count}{Integer. Then keep top-N of those by FDR.}
 }
 \value{
 A `data.table` (possibly empty).
 }
 \description{
 Removes the precursor self-peak (within `ms1_ppm`, skipped when `<= 0`),
-then keeps the top `cor_count` groups by correlation, then the top
-`fdr_count` of those by FDR — matches the notebook's two-stage ranking.
+then keeps the top `cor_thresh` groups by correlation, then the top
+`fdr_thresh` of those by FDR — matches the notebook's two-stage ranking.
 }

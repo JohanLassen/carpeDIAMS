@@ -12,6 +12,7 @@ Imports:
     reticulate,
     xcms,
     Spectra,
+    MsExperiment,
     data.table,
     arrow,
     dplyr,
