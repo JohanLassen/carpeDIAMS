@@ -23,3 +23,4 @@ Joins per-feature chromPeaks (from [getBackendPeaks()]) to the Spectra
 backend's per-scan metadata, producing one row per (feature, sample) with
 the scan indices inside the peak RT window plus the apex scan.
 }
+\keyword{internal}

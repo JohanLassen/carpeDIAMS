@@ -19,6 +19,7 @@
 #' @param subsample Logical. When `FALSE`, skip apricot and return all
 #'   samples as-is; Python/apricot are not touched.
 #' @return A list with elements `msobject`, `assay`, `peaks`.
+#' @keywords internal
 #' @export
 subset_samples_xcms <- function(
     msobject,

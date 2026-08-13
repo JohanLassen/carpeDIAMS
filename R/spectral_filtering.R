@@ -7,6 +7,7 @@
 #'
 #' @param file_directory Directory containing `*_pool.parquet` + `*_pointers.parquet`.
 #' @return A live DuckDB connection.
+#' @keywords internal
 #' @export
 setup_connection <- function(file_directory) {
   # Resolve to absolute path — DuckDB may not share R's working directory
@@ -36,6 +37,7 @@ setup_connection <- function(file_directory) {
 #' @param chunk_size Integer. Features per `IN`-clause.
 #' @return `data.table` with columns
 #'   `sample, feature, mz, fragment_mz, int, ms1_scan, ms2_scan, ms1_int`.
+#' @keywords internal
 #' @export
 batch_get_feature_data <- function(feature_ids, con, chunk_size = 500) {
   # DuckDB is fast at IN clauses but we chunk to avoid overly long SQL
@@ -83,6 +85,7 @@ batch_get_feature_data <- function(feature_ids, con, chunk_size = 500) {
 #' @param buffer Integer. Scan window around apex per sample.
 #' @param min_count Integer. Minimum scan-count per group.
 #' @return list(grouped_signal, correlations), or `NULL`.
+#' @keywords internal
 #' @export
 process_pseudo_spec <- function(
   dt,
@@ -168,6 +171,7 @@ process_pseudo_spec <- function(
 #' @param cor_thresh Integer. Keep top-N by correlation.
 #' @param fdr_thresh Integer. Then keep top-N of those by FDR.
 #' @return A `data.table` (possibly empty).
+#' @keywords internal
 #' @export
 select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05) {
   if (nrow(correlations) == 0) return(correlations)
@@ -246,6 +250,13 @@ select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05
 #' @param con Optional pre-opened connection (else opened + closed internally).
 #' @param ms1_ppm,ms2_ppm Numeric ppm tolerances.
 #' @param buffer,fdr_thresh,cor_thresh,min_count Tunables passed downstream.
+#'   `fdr_thresh` / `cor_thresh` are only consulted by the default
+#'   `filter_fn`; a custom `filter_fn` may ignore them.
+#' @param filter_fn Function taking a `correlations` `data.table` and
+#'   returning the surviving rows. `NULL` (default) uses
+#'   [select_pseudo_spec()] bound to `cor_thresh` / `fdr_thresh`.
+#'   Provide your own to swap in a different significance/selection
+#'   scheme (research-swappable — same role as `grouper`).
 #' @param report,report_path PDF diagnostic report on/off + path.
 #' @param mgf_dir Optional directory for per-feature MGFs.
 #' @param fetch_chunk_size Features per DuckDB query.
@@ -263,12 +274,16 @@ clean_pseudo_spectra <- function(
   fdr_thresh       = 0.01,
   cor_thresh       = 0.3,
   min_count        = 10L,
+  filter_fn        = NULL,
   report           = TRUE,
   report_path      = "pseudo_specs_report.pdf",
   mgf_dir          = NULL,
   fetch_chunk_size = 200L,
   progress         = TRUE
 ) {
+  if (is.null(filter_fn))
+    filter_fn <- function(correlations)
+      select_pseudo_spec(correlations, cor_thresh, fdr_thresh)
   own_con <- is.null(con)
   if (own_con) {
     con <- setup_connection(file_directory)
@@ -326,7 +341,7 @@ clean_pseudo_spectra <- function(
       )
       if (is.null(out) || nrow(out$correlations) == 0) return(NULL)
 
-      pseudo_spec <- select_pseudo_spec(out$correlations, cor_thresh, fdr_thresh)
+      pseudo_spec <- filter_fn(out$correlations)
 
       if (nrow(pseudo_spec) == 0) return(NULL)
 

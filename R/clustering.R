@@ -113,6 +113,7 @@ function(mz, target_mz = NULL) {
 #' @param mz_example Numeric vector to probe with.
 #' @param target_mz Numeric scalar passed to the grouper.
 #' @return Invisibly `TRUE` when valid; throws otherwise.
+#' @keywords internal
 #' @export
 validate_grouper <- function(grouper,
                             mz_example = c(100.000, 100.001, 100.500, 200.000),

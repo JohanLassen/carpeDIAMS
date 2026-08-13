@@ -4,10 +4,13 @@
 #'
 #' @param path mzML file path.
 #' @param tmp_dir working directory for intermediate parquet + outputs.
+#' @param output MGF path. `NULL` (default) writes to
+#'   `file.path(tmp_dir, "all_features.mgf")` for backward compatibility.
 #' @param rt_range retention-time window (seconds) to retain.
 #' @return cleaned pseudo-spectra data.table (invisibly written to MGF too).
+#' @family api
 #' @export
-process_mzml <- function(path, tmp_dir, rt_range = c(30, 1200)){
+process_mzml <- function(path, tmp_dir, output = NULL, rt_range = c(30, 1200)){
     
     cli::cli_h1("Processing {.file {basename(path)}}")
     cli::cli_progress_step("Loading spectra and filtering RT to {rt_range[1]}-{rt_range[2]}s")
@@ -79,8 +82,9 @@ process_mzml <- function(path, tmp_dir, rt_range = c(30, 1200)){
         )
 
     # --- export ---
-    cli::cli_progress_step("Writing MGF")
-    mgf_path <- file.path(tmp_dir, "all_features.mgf")
+    mgf_path <- if (is.null(output)) file.path(tmp_dir, "all_features.mgf") else output
+    dir.create(dirname(mgf_path), showWarnings = FALSE, recursive = TRUE)
+    cli::cli_progress_step("Writing MGF to {.file {mgf_path}}")
     export_mgf(cleaned_spectra, fd = fd, mgf_path = mgf_path, ion_mode = "POSITIVE")
 
     cli::cli_progress_done()
@@ -139,9 +143,12 @@ process_mzml <- function(path, tmp_dir, rt_range = c(30, 1200)){
 #'   window (peak-alignment slack).
 #' @param grouper Fragment-grouping function; `NULL` uses
 #'   `ppm_upgma(ppm = ppm)`.
+#' @param fdr_thresh,cor_thresh,min_count Passed to
+#'   [clean_pseudo_spectra()]. Defaults mirror [process_mzml()]
+#'   (permissive) rather than [clean_pseudo_spectra()]'s stricter
+#'   built-in defaults.
 #' @param ion_mode `"POSITIVE"` or `"NEGATIVE"`; written to MGF headers.
-#' @param ... Forwarded to [clean_pseudo_spectra()] (e.g. `fdr_thresh`,
-#'   `cor_thresh`, `min_count`, `buffer`).
+#' @param ... Forwarded to [clean_pseudo_spectra()] (e.g. `buffer`).
 #' @return Invisibly the `tmp_dir` path (useful for chaining stages).
 #' @family api
 #' @export
@@ -159,6 +166,9 @@ process_xcms <- function(
     ppm        = 20,
     rt_buffer  = 5,
     grouper    = NULL,
+    fdr_thresh = 0.1,
+    cor_thresh = 0.1,
+    min_count  = 10L,
     ion_mode   = "POSITIVE",
     ...
 ) {
@@ -197,7 +207,9 @@ process_xcms <- function(
     if (stage %in% c("all", "finalize")) {
         if (is.null(output))
             cli::cli_abort("{.arg output} is required for stage {.val {stage}}.")
-        .finalize_stage(tmp_dir, output, ppm, grouper, ion_mode, ...)
+        .finalize_stage(tmp_dir, output, ppm, grouper,
+                        fdr_thresh, cor_thresh, min_count,
+                        ion_mode, ...)
     }
 
     invisible(tmp_dir)
@@ -285,7 +297,9 @@ process_xcms <- function(
 
 #' @keywords internal
 #' @noRd
-.finalize_stage <- function(tmp_dir, output, ppm, grouper, ion_mode, ...) {
+.finalize_stage <- function(tmp_dir, output, ppm, grouper,
+                            fdr_thresh, cor_thresh, min_count,
+                            ion_mode, ...) {
     fd <- readRDS(file.path(tmp_dir, "fd.rds"))
     cli::cli_progress_step("Filtering pseudo-spectra ({nrow(fd)} features)")
     cleaned <- clean_pseudo_spectra(
@@ -294,6 +308,9 @@ process_xcms <- function(
         fd             = fd,
         ms1_ppm        = ppm,
         grouper        = grouper,
+        fdr_thresh     = fdr_thresh,
+        cor_thresh     = cor_thresh,
+        min_count      = min_count,
         report         = FALSE,
         mgf_dir        = NULL,
         progress       = FALSE,
@@ -321,4 +338,346 @@ process_xcms <- function(
     if (length(hit) == 0)
         cli::cli_abort("{.arg sample_file} {.val {sample_file}} not found in manifest.")
     as.integer(hit[1])
+}
+
+
+# ---- process_targetlist ------------------------------------------------------
+
+#' Build pseudo-spectra MGF from mzML file(s) against a target list
+#'
+#' User-facing entry point for the targeted workflow: given a CSV of
+#' `mz`/`rt` targets and one-or-many mzML files, produce an MGF of
+#' pseudo-spectra. Same `stage`/`sample_idx` shape as [process_xcms()]
+#' so a DAG can parallelize per-sample; interactive users leave
+#' `stage = "all"`.
+#'
+#' # On-disk contract (identical to [process_xcms()])
+#'
+#' \itemize{
+#'   \item `<tmp_dir>/manifest.csv` — `sample_idx,filename`.
+#'   \item `<tmp_dir>/fd.rds` — feature-definition frame derived from
+#'     the target list (`feature_id`, `mzmed`, `rtmed`).
+#'   \item `<tmp_dir>/sample_<idx>_pool.parquet`,
+#'         `<tmp_dir>/sample_<idx>_pointers.parquet`.
+#' }
+#'
+#' @param input Single mzML path, a directory of mzMLs, or a character
+#'   vector of mzML paths.
+#' @param output MGF path. Required for `stage = "all"` or `"finalize"`.
+#' @param targetlist Path to CSV with `mz` and `rt` columns (optional
+#'   `feature`), or a data.frame with the same shape.
+#' @param tmp_dir Working directory. `NULL` only for `stage = "all"`
+#'   (creates + cleans a `tempfile`); required otherwise.
+#' @param stage One of `"all"`, `"prepare"`, `"sample"`, `"finalize"`.
+#' @param sample_idx,sample_file Sample addressing for
+#'   `stage = "sample"`; idx is 1-based into `manifest`.
+#' @param ppm Fragment/precursor tolerance in ppm.
+#' @param rt_width Total width (seconds) of the RT window around each
+#'   target's `rt` when extracting scans.
+#' @param grouper Fragment-grouping function; `NULL` uses
+#'   `ppm_upgma(ppm = ppm)`.
+#' @param fdr_thresh,cor_thresh,min_count Passed to
+#'   [clean_pseudo_spectra()] (permissive defaults).
+#' @param ion_mode `"POSITIVE"` or `"NEGATIVE"`.
+#' @param ... Forwarded to [clean_pseudo_spectra()].
+#' @return Invisibly the `tmp_dir` path.
+#' @family api
+#' @export
+process_targetlist <- function(
+    input,
+    output      = NULL,
+    targetlist  = NULL,
+    tmp_dir     = NULL,
+    stage       = c("all", "prepare", "sample", "finalize"),
+    sample_idx  = NULL,
+    sample_file = NULL,
+    ppm         = 20,
+    rt_width    = 15,
+    grouper     = NULL,
+    fdr_thresh  = 0.1,
+    cor_thresh  = 0.1,
+    min_count   = 10L,
+    ion_mode    = "POSITIVE",
+    ...
+) {
+    stage <- match.arg(stage)
+    if (is.null(grouper)) grouper <- ppm_upgma(ppm = ppm)
+
+    if (is.null(tmp_dir)) {
+        if (stage != "all")
+            cli::cli_abort("{.arg tmp_dir} is required when {.code stage != \"all\"}.")
+        tmp_dir <- tempfile("carpediams_")
+        dir.create(tmp_dir, recursive = TRUE)
+        on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+    } else {
+        dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
+    }
+
+    if (stage %in% c("all", "prepare")) {
+        if (is.null(targetlist))
+            cli::cli_abort("{.arg targetlist} is required for stage {.val {stage}}.")
+        .prepare_targetlist_stage(input, targetlist, tmp_dir)
+    }
+
+    if (stage == "sample") {
+        sid <- .resolve_sample_id(sample_idx, sample_file, tmp_dir)
+        .sample_targetlist_stage(tmp_dir, sid, ppm, rt_width)
+    }
+
+    if (stage == "all") {
+        manifest <- utils::read.csv(file.path(tmp_dir, "manifest.csv"))
+        cli::cli_progress_bar("Building per-sample parquets",
+                              total = nrow(manifest))
+        for (sid in manifest$sample_idx) {
+            suppressMessages(.sample_targetlist_stage(tmp_dir, sid, ppm, rt_width))
+            cli::cli_progress_update()
+        }
+        cli::cli_progress_done()
+    }
+
+    if (stage %in% c("all", "finalize")) {
+        if (is.null(output))
+            cli::cli_abort("{.arg output} is required for stage {.val {stage}}.")
+        .finalize_stage(tmp_dir, output, ppm, grouper,
+                        fdr_thresh, cor_thresh, min_count,
+                        ion_mode, ...)
+    }
+
+    invisible(tmp_dir)
+}
+
+
+# ---- internal stage helpers (targetlist) -------------------------------------
+
+#' @keywords internal
+#' @noRd
+.resolve_targetlist_input <- function(input) {
+    if (length(input) > 1) {
+        missing <- input[!file.exists(input)]
+        if (length(missing))
+            cli::cli_abort("Missing file{?s}: {.path {missing}}")
+        return(input)
+    }
+    if (dir.exists(input)) {
+        files <- list.files(input, pattern = "\\.mzML$",
+                            full.names = TRUE, ignore.case = TRUE)
+        if (!length(files))
+            cli::cli_abort("No .mzML files in {.path {input}}")
+        return(files)
+    }
+    if (file.exists(input)) return(input)
+    cli::cli_abort("Input must be an mzML file, directory, or vector of mzML paths.")
+}
+
+#' @keywords internal
+#' @noRd
+.load_targetlist <- function(targetlist) {
+    tl <- if (is.character(targetlist)) {
+        readr::read_csv(targetlist, show_col_types = FALSE)
+    } else as.data.frame(targetlist)
+    miss <- setdiff(c("mz", "rt"), colnames(tl))
+    if (length(miss)) cli::cli_abort("targetlist missing column{?s}: {miss}")
+    tl <- tl[!is.na(tl$mz) & !is.na(tl$rt), ]
+    if (max(tl$rt) < 60) {
+        cli::cli_alert_info(
+            "RT looks like minutes (max = {round(max(tl$rt), 2)}); converting to seconds.")
+        tl$rt <- tl$rt * 60
+    }
+    if (!"feature" %in% colnames(tl))
+        tl$feature <- sprintf("FT%0*d", nchar(nrow(tl)), seq_len(nrow(tl)))
+    tl$feature <- as.character(tl$feature)
+    tl
+}
+
+#' @keywords internal
+#' @noRd
+.prepare_targetlist_stage <- function(input, targetlist, tmp_dir) {
+    cli::cli_progress_step("Resolving input files")
+    files <- .resolve_targetlist_input(input)
+
+    cli::cli_progress_step("Loading target list")
+    tl <- .load_targetlist(targetlist)
+
+    manifest <- data.frame(
+        sample_idx = seq_along(files),
+        filename   = files,
+        stringsAsFactors = FALSE
+    )
+    utils::write.csv(manifest, file.path(tmp_dir, "manifest.csv"),
+                     row.names = FALSE)
+
+    fd <- data.frame(
+        feature_id = tl$feature,
+        mzmed      = tl$mz,
+        rtmed      = tl$rt,
+        row.names  = tl$feature,
+        stringsAsFactors = FALSE
+    )
+    saveRDS(fd, file.path(tmp_dir, "fd.rds"))
+
+    cli::cli_alert_success(
+        "Prepare complete: {nrow(manifest)} file{?s}, {nrow(fd)} target{?s} -> {.path {tmp_dir}}")
+}
+
+#' @keywords internal
+#' @noRd
+.sample_targetlist_stage <- function(tmp_dir, sample_idx, ppm, rt_width) {
+    manifest <- utils::read.csv(file.path(tmp_dir, "manifest.csv"))
+    file_name <- manifest$filename[manifest$sample_idx == sample_idx]
+    if (length(file_name) != 1)
+        cli::cli_abort("sample_idx {.val {sample_idx}} not found in manifest.")
+
+    fd <- readRDS(file.path(tmp_dir, "fd.rds"))
+
+    sps <- Spectra::Spectra(file_name, backend = Spectra::MsBackendMzR())
+    if (!2 %in% Spectra::msLevel(sps)) {
+        new_lvl <- as.integer((Spectra::scanIndex(sps) %% 2) + 1L)
+        tab <- table(new_lvl)
+        if (length(tab) < 2 || min(tab) / max(tab) < 0.3)
+            cli::cli_abort(
+                "Frame-parity MS-level assignment for {.file {basename(file_name)}} looks wrong (split: {paste(tab, collapse='/')}).")
+        sps$msLevel <- new_lvl
+    }
+
+    spectra_df <- as.data.frame(Spectra::spectraData(sps)) |>
+        dplyr::filter(msLevel == 1) |>
+        dplyr::select(dataOrigin, rtime, acquisitionNum)
+
+    scan_info <- data.frame(
+        feature  = fd$feature_id,
+        mz       = fd$mzmed,
+        rt       = fd$rtmed,
+        filename = file_name,
+        sample   = sample_idx,
+        stringsAsFactors = FALSE
+    ) |>
+        dplyr::inner_join(spectra_df,
+                          by = c("filename" = "dataOrigin"),
+                          relationship = "many-to-many") |>
+        dplyr::filter(rtime >= rt - rt_width / 2,
+                      rtime <= rt + rt_width / 2) |>
+        dplyr::group_by(feature, sample, filename, mz, rt) |>
+        dplyr::summarise(
+            scan_indices    = list(acquisitionNum),
+            apex_scan_index = acquisitionNum[which.min(abs(rtime - rt))],
+            .groups = "drop"
+        ) |>
+        tidyr::unnest(scan_indices)
+
+    if (nrow(scan_info) == 0) {
+        message("Sample ", sample_idx, ": no targets fell in the ", rt_width, "s window.")
+        return(invisible(NULL))
+    }
+
+    max_diff <- max(fd$mzmed, na.rm = TRUE) * ppm * 1e-6
+    Ms2PseudoRaw(
+        single_sample  = scan_info,
+        spectra_object = sps,
+        output_dir     = tmp_dir,
+        maxDiff        = max_diff
+    )
+}
+
+
+# ---- carpediams (unified dispatch) -------------------------------------------
+
+#' Build pseudo-spectra MGF - unified entry point
+#'
+#' Auto-dispatches to [process_mzml()], [process_targetlist()], or
+#' [process_xcms()] based on the shape of `input` and whether a
+#' `targetlist` is supplied. Same defaults, thresholds, and stage
+#' machinery as the routed function.
+#'
+#' # Routing rules
+#'
+#' \itemize{
+#'   \item An `XcmsExperiment`/`XCMSnExp` object, or a path to one
+#'     (`.rds` / `.qs` / `.rda`) -> [process_xcms()].
+#'     `targetlist` is ignored (with a warning) — the xcms object
+#'     carries its own feature definitions.
+#'   \item Any mzML input **with** a `targetlist` -> [process_targetlist()].
+#'   \item A single mzML **without** a `targetlist` -> [process_mzml()].
+#'   \item A directory or a character vector of mzMLs without a
+#'     `targetlist` -> error (ambiguous — supply a targetlist or run
+#'     [process_mzml()] per file).
+#' }
+#'
+#' @param input Path or object; see routing rules.
+#' @param output MGF path.
+#' @param targetlist Optional CSV path or data.frame with `mz`, `rt`
+#'   columns. Forces the targetlist route when combined with mzML input.
+#' @param tmp_dir Working directory. `NULL` (default) creates and cleans
+#'   a `tempfile()`. Pass an explicit path for split-stage runs.
+#' @param ... Forwarded to the routed function. See that function's
+#'   docs for stage machinery, thresholds, and route-specific params.
+#' @return Whatever the routed function returns (typically an invisible
+#'   `data.table` of pseudo-spectra or the `tmp_dir` path).
+#' @family api
+#' @export
+carpediams <- function(input, output, targetlist = NULL, tmp_dir = NULL, ...) {
+    route <- .detect_route(input, targetlist)
+    cli::cli_h1("carpediams route: {.strong {route}}")
+
+    if (is.null(tmp_dir)) {
+        tmp_dir <- tempfile("carpediams_")
+        dir.create(tmp_dir, recursive = TRUE)
+        on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+    } else {
+        dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
+    }
+
+    switch(route,
+        xcms       = process_xcms(
+            input   = input,
+            output  = output,
+            tmp_dir = tmp_dir,
+            ...),
+        targetlist = process_targetlist(
+            input      = input,
+            output     = output,
+            targetlist = targetlist,
+            tmp_dir    = tmp_dir,
+            ...),
+        mzml       = process_mzml(
+            path    = input,
+            tmp_dir = tmp_dir,
+            output  = output,
+            ...)
+    )
+}
+
+#' @keywords internal
+#' @noRd
+.detect_route <- function(input, targetlist) {
+    if (inherits(input, c("XcmsExperiment", "XCMSnExp"))) {
+        if (!is.null(targetlist))
+            cli::cli_alert_warning("{.arg targetlist} ignored for xcms object input.")
+        return("xcms")
+    }
+    if (!is.character(input))
+        cli::cli_abort("{.arg input} must be a character path/vector or an {.cls XcmsExperiment}.")
+
+    if (length(input) > 1) {
+        if (is.null(targetlist))
+            cli::cli_abort("Multiple mzML paths require a {.arg targetlist} - or call {.fn process_mzml} per file.")
+        return("targetlist")
+    }
+    if (dir.exists(input)) {
+        if (is.null(targetlist))
+            cli::cli_abort("A directory input requires a {.arg targetlist}.")
+        return("targetlist")
+    }
+    if (!file.exists(input))
+        cli::cli_abort("{.arg input} path does not exist: {.path {input}}")
+
+    ext <- tolower(tools::file_ext(input))
+    if (ext %in% c("rds", "qs", "rda")) {
+        if (!is.null(targetlist))
+            cli::cli_alert_warning("{.arg targetlist} ignored for serialized xcms input.")
+        return("xcms")
+    }
+    if (ext == "mzml")
+        return(if (is.null(targetlist)) "mzml" else "targetlist")
+
+    cli::cli_abort("Unrecognized file extension {.val {ext}} for {.arg input}.")
 }

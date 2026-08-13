@@ -9,6 +9,7 @@
 #' @param path Output `.mgf` path.
 #' @param rt Optional retention time (seconds); skipped when `NA`.
 #' @return Invisibly `path`, or `NULL` when `pseudo_spec` is empty.
+#' @keywords internal
 #' @export
 write_simple_mgf <- function(pseudo_spec, mz_target, feature_id, path,
                              rt = NA_real_) {

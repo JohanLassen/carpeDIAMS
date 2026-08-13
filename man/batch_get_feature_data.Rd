@@ -21,3 +21,4 @@ batch_get_feature_data(feature_ids, con, chunk_size = 500)
 Joins `pointers ⨝ pool` on `(sample, scan + 1)` with the precursor cut
 `m.mz <= p.mz_target + 2`. Chunks the feature list to bound `IN (…)`.
 }
+\keyword{internal}

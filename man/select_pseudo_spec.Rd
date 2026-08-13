@@ -25,3 +25,4 @@ Removes the precursor self-peak (within `ms1_ppm`, skipped when `<= 0`),
 then keeps the top `cor_thresh` groups by correlation, then the top
 `fdr_thresh` of those by FDR — matches the notebook's two-stage ranking.
 }
+\keyword{internal}

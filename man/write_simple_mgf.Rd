@@ -24,3 +24,4 @@ Invisibly `path`, or `NULL` when `pseudo_spec` is empty.
 Each file is a complete `BEGIN IONS ... END IONS` — merge with
 `cat <dir>/*.mgf > combined.mgf`.
 }
+\keyword{internal}

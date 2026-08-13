@@ -40,3 +40,4 @@ is returned alongside the msobject because downstream
 `getBackendPeaks()` needs the original peak-row indexing (`peakidx`
 from the parent featureDefinitions).
 }
+\keyword{internal}

@@ -18,6 +18,9 @@ process_xcms(
   ppm = 20,
   rt_buffer = 5,
   grouper = NULL,
+  fdr_thresh = 0.1,
+  cor_thresh = 0.1,
+  min_count = 10L,
   ion_mode = "POSITIVE",
   ...
 )
@@ -59,10 +62,14 @@ window (peak-alignment slack).}
 \item{grouper}{Fragment-grouping function; `NULL` uses
 `ppm_upgma(ppm = ppm)`.}
 
+\item{fdr_thresh, cor_thresh, min_count}{Passed to
+[clean_pseudo_spectra()]. Defaults mirror [process_mzml()]
+(permissive) rather than [clean_pseudo_spectra()]'s stricter
+built-in defaults.}
+
 \item{ion_mode}{`"POSITIVE"` or `"NEGATIVE"`; written to MGF headers.}
 
-\item{...}{Forwarded to [clean_pseudo_spectra()] (e.g. `fdr_thresh`,
-`cor_thresh`, `min_count`, `buffer`).}
+\item{...}{Forwarded to [clean_pseudo_spectra()] (e.g. `buffer`).}
 }
 \value{
 Invisibly the `tmp_dir` path (useful for chaining stages).
@@ -90,5 +97,11 @@ declare dependencies on these paths without asking R what was written:
 }
 
 Split-stage runs must share the same `tmp_dir`.
+}
+\seealso{
+Other api:
+\code{\link[=carpediams]{carpediams()}},
+\code{\link[=process_mzml]{process_mzml()}},
+\code{\link[=process_targetlist]{process_targetlist()}}
 }
 \concept{api}

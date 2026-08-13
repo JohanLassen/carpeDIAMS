@@ -30,3 +30,4 @@ list(grouped_signal, correlations), or `NULL`.
 Per-sample apex window → two-pass ppm-UPGMA grouping → per-group
 Pearson correlation of summed MS2 vs MS1 + BH FDR.
 }
+\keyword{internal}

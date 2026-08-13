@@ -25,3 +25,4 @@ Calls `grouper(mz_example, target_mz)` and asserts that the result is the
 right length and has no more unique values than the input. Use this once
 when wiring up a custom grouper; do not call inside hot loops.
 }
+\keyword{internal}

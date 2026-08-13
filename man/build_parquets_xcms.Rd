@@ -40,3 +40,4 @@ Invisibly `NULL`. Writes two parquets to `out_dir`.
 Stage-01 orchestrator: takes the output of [subset_samples_xcms()] and
 calls [Ms2PseudoRaw()] for one `sample_id`.
 }
+\keyword{internal}

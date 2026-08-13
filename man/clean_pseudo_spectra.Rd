@@ -15,6 +15,7 @@ clean_pseudo_spectra(
   fdr_thresh = 0.01,
   cor_thresh = 0.3,
   min_count = 10L,
+  filter_fn = NULL,
   report = TRUE,
   report_path = "pseudo_specs_report.pdf",
   mgf_dir = NULL,
@@ -34,7 +35,15 @@ clean_pseudo_spectra(
 
 \item{ms1_ppm, ms2_ppm}{Numeric ppm tolerances.}
 
-\item{buffer, fdr_thresh, cor_thresh, min_count}{Tunables passed downstream.}
+\item{buffer, fdr_thresh, cor_thresh, min_count}{Tunables passed downstream.
+`fdr_thresh` / `cor_thresh` are only consulted by the default
+`filter_fn`; a custom `filter_fn` may ignore them.}
+
+\item{filter_fn}{Function taking a `correlations` `data.table` and
+returning the surviving rows. `NULL` (default) uses
+[select_pseudo_spec()] bound to `cor_thresh` / `fdr_thresh`.
+Provide your own to swap in a different significance/selection
+scheme (research-swappable — same role as `grouper`).}
 
 \item{report, report_path}{PDF diagnostic report on/off + path.}
 

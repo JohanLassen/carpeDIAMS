@@ -11,6 +11,7 @@
 #' @param all_peaks chromPeaks matrix from the parent msobject.
 #' @param sample_filter Optional integer vector; keep only peaks from these samples.
 #' @return Named list of chromPeaks-row matrices (one per feature id).
+#' @keywords internal
 #' @export
 getBackendPeaks <- function(object, fd, sample_filter = NULL) {
   # all_peaks must be the chromPeaks from the FULL (pre-subset) msobject that
@@ -91,6 +92,7 @@ get_scans_optimized <- function(feature_id, dataOrigin, rtmin, rtmax, rt, sample
 #' @param spectra_df Backend metadata, e.g.
 #'   `Spectra::spectra(msobject)@backend@spectraData@listData |> dplyr::bind_cols()`.
 #' @return Tibble: `sample, filename, mz, feature, scan_indices, apex_scan_index, n_scans`.
+#' @keywords internal
 #' @export
 extractScanInfo <- function(feature_peaks, filenames, spectra_df, target_list = FALSE){
 
@@ -130,6 +132,7 @@ extractScanInfo <- function(feature_peaks, filenames, spectra_df, target_list = 
 #' @param buffer Integer. Scan-window slack on each side of the feature's range.
 #' @param return_spectra Logical. If `TRUE`, also return pool + pointers as tibbles.
 #' @return `NULL` (or `list(pool, pointer)` if `return_spectra = TRUE`).
+#' @keywords internal
 #' @export
 Ms2PseudoRaw <- function(
     single_sample,
@@ -247,6 +250,7 @@ Ms2PseudoRaw <- function(
 #' @param rt_buffer Numeric. Seconds added to each side of every peak's
 #'   RT window before scan extraction (compensates for alignment jitter).
 #' @return Invisibly `NULL`. Writes two parquets to `out_dir`.
+#' @keywords internal
 #' @export
 build_parquets_xcms <- function(
     mssubset,

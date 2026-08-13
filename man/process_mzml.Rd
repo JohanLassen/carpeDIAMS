@@ -4,12 +4,15 @@
 \alias{process_mzml}
 \title{Process a single mzML file into a pseudo-spectra MGF}
 \usage{
-process_mzml(path, tmp_dir, rt_range = c(30, 1200))
+process_mzml(path, tmp_dir, output = NULL, rt_range = c(30, 1200))
 }
 \arguments{
 \item{path}{mzML file path.}
 
 \item{tmp_dir}{working directory for intermediate parquet + outputs.}
+
+\item{output}{MGF path. `NULL` (default) writes to
+`file.path(tmp_dir, "all_features.mgf")` for backward compatibility.}
 
 \item{rt_range}{retention-time window (seconds) to retain.}
 }
@@ -19,3 +22,10 @@ cleaned pseudo-spectra data.table (invisibly written to MGF too).
 \description{
 Process a single mzML file into a pseudo-spectra MGF
 }
+\seealso{
+Other api:
+\code{\link[=carpediams]{carpediams()}},
+\code{\link[=process_targetlist]{process_targetlist()}},
+\code{\link[=process_xcms]{process_xcms()}}
+}
+\concept{api}

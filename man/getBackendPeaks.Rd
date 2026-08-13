@@ -25,3 +25,4 @@ to it (via `peakidx`). `all_peaks` must be the chromPeaks from the parent
 `peakidx` <-> `chromPeaks` invariant. Pass `mssubset$peaks` (from
 [subset_samples_xcms()]).
 }
+\keyword{internal}

@@ -34,3 +34,4 @@ Writes `sample_<id>_pool.parquet` (all MS2 fragments in the file) and
 `sample_<id>_pointers.parquet` (one row per feature x MS1 scan, with
 summed MS1 intensity). Together these feed [clean_pseudo_spectra()].
 }
+\keyword{internal}

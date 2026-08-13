@@ -24,7 +24,10 @@ Imports:
 Suggests:
     ggplot2,
     ggrepel,
-    cowplot
+    cowplot,
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
 LinkingTo: Rcpp
 SystemRequirements: Python (>= 3.8), apricot-select, numpy
 Config/roxygen2/version: 8.0.0

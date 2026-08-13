@@ -18,3 +18,4 @@ parquets produced by [Ms2PseudoRaw()]. Caller is responsible for
 `DBI::dbDisconnect(con, shutdown = TRUE)` — or pass the connection to
 [clean_pseudo_spectra()] which closes it on exit.
 }
+\keyword{internal}
