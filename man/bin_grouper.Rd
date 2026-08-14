@@ -10,19 +10,15 @@ bin_grouper(bin_width = 0.01)
 \item{bin_width}{Numeric. Bin width in Da (typical: 0.01, 0.05, 0.1).}
 }
 \value{
-A `function(mz, target_mz)` satisfying the grouper contract.
+A grouper closure - see [grouper-contract].
 }
 \description{
-Returns a grouper closure that assigns each m/z to a bin of width
-`bin_width` (Da). Two values share a group iff `floor(mz / bin_width)`
-is equal — fast, deterministic, and oblivious to clustering.
-}
-\details{
-Be aware of the bin-boundary artifact: values straddling a boundary
-get split even if they're closer to each other than `bin_width`. For
-tolerant grouping use [ppm_upgma()] / [abs_upgma()] instead.
+Assigns each m/z to a bin of width `bin_width` (Da) - fast,
+deterministic. Bin-boundary values straddling a boundary get split
+even when closer to each other than `bin_width`; for tolerant
+grouping use [ppm_upgma()] / [abs_upgma()] instead. Uses only `mz`.
 }
 \examples{
 g <- bin_grouper(bin_width = 0.01)
-g(c(100.001, 100.009, 100.015), target_mz = NA)
+g(c(100.001, 100.009, 100.015))
 }

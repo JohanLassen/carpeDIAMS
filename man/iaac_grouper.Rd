@@ -2,7 +2,7 @@
 % Please edit documentation in R/clustering.R
 \name{iaac_grouper}
 \alias{iaac_grouper}
-\title{Intensity adaptive agglomerative clustering grouper}
+\title{Intensity-adaptive agglomerative clustering grouper}
 \usage{
 iaac_grouper(k = 1, p0 = 8, Isat = 1e+05)
 }
@@ -14,16 +14,17 @@ iaac_grouper(k = 1, p0 = 8, Isat = 1e+05)
 \item{Isat}{Numeric. Saturation intensity.}
 }
 \value{
-A `function(mz)` satisfying the grouper contract.
+A grouper closure - see [grouper-contract].
 }
 \description{
 Returns a grouper closure that calls the package's C++ 1-D IAAC
-implementation with `k`, `p0`, and `Isat` parameters.
+implementation. Uses `mz` and `intensity`; ignores `target_mz`,
+`scan`, `ms1_int`.
 }
 \examples{
 g <- iaac_grouper(k = 1, p0 = 8, Isat = 1e5)
-g(c(100.0, 100.001, 200.0))
+g(c(100.0, 100.001, 200.0), intensity = c(1000, 800, 200))
 }
 \seealso{
-[abs_upgma()], [validate_grouper()], `fast_1D_iaac_grouping_cpp()`
+[ppm_upgma()], [abs_upgma()], [validate_grouper()]
 }

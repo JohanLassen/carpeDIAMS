@@ -24,11 +24,26 @@ export(setup_connection)
 export(subset_samples_xcms)
 export(validate_grouper)
 export(write_simple_mgf)
+import(DBI)
+import(MsExperiment)
+import(Spectra)
+import(arrow)
+import(cli)
+import(dplyr)
+import(duckdb)
+import(purrr)
+import(readr)
+import(reticulate)
+import(tibble)
+import(tidyr)
+import(xcms)
 importFrom(Rcpp,sourceCpp)
-importFrom(data.table,":=")
-importFrom(data.table,.I)
-importFrom(data.table,.SD)
-importFrom(data.table,data.table)
-importFrom(data.table,setDT)
-importFrom(data.table,setkey)
+importFrom(data.table,
+  ":=",
+  .I,
+  .SD,
+  data.table,
+  setDT,
+  setkey
+)
 useDynLib(carpeDIAMS, .registration = TRUE)

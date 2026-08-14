@@ -5,30 +5,22 @@
 \title{ppm-based UPGMA grouper (the package default)}
 \usage{
 ppm_upgma(ppm = 30)
-
-ppm_upgma(ppm = 30)
 }
 \arguments{
 \item{ppm}{Numeric. Tolerance in parts per million.}
 }
 \value{
-A `function(mz, target_mz)` satisfying the grouper contract.
-
-A `function(mz, target_mz)` satisfying the grouper contract.
+A grouper closure - see [grouper-contract].
 }
 \description{
 Returns a grouper closure that calls the package's C++ 1-D UPGMA
 implementation with `maxDiff = 1e-6 * target_mz * ppm`.
-
-Returns a grouper closure that calls the package's C++ 1-D UPGMA
-implementation with `maxDiff = 1e-6 * target_mz * ppm`.
+Uses `mz` and `target_mz`; ignores `intensity`, `scan`, `ms1_int`.
 }
 \examples{
 g <- ppm_upgma(ppm = 30)
 g(c(100.0, 100.001, 200.0), target_mz = 100)
-g <- ppm_upgma(ppm = 30)
-g(c(100.0, 100.001, 200.0), target_mz = 100)
 }
 \seealso{
-[abs_upgma()], [validate_grouper()], `fast_1D_upgma_grouping_cpp()`
+[abs_upgma()], [iaac_grouper()], [validate_grouper()]
 }

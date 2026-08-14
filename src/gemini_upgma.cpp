@@ -34,8 +34,8 @@ struct Point {
 };
 
 //' Fast 1D UPGMA grouping
-//' @param mz numeric vector
-//' @param maxDiff numeric scalar
+//' @param x numeric vector of m/z values
+//' @param maxDiff numeric scalar; maximum absolute difference within a group
 //' @return integer vector of group ids
 //' @export
 // [[Rcpp::export]]

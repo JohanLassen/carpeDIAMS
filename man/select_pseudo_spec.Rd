@@ -2,27 +2,24 @@
 % Please edit documentation in R/spectral_filtering.R
 \name{select_pseudo_spec}
 \alias{select_pseudo_spec}
-\title{Apply self-peak filter and top-N selection to per-group correlations}
+\title{Filter per-group correlations by correlation + FDR thresholds}
 \usage{
 select_pseudo_spec(correlations, cor_thresh = 0.5, fdr_thresh = 0.05)
 }
 \arguments{
 \item{correlations}{`data.table` from `process_pseudo_spec()$correlations`.}
 
-\item{cor_thresh}{Integer. Keep top-N by correlation.}
+\item{cor_thresh}{Numeric. Minimum correlation to keep.}
 
-\item{fdr_thresh}{Integer. Then keep top-N of those by FDR.}
-
-\item{mz_target}{Numeric. Precursor m/z.}
-
-\item{ms1_ppm}{Numeric. Tolerance for self-peak filter; `<= 0` skips.}
+\item{fdr_thresh}{Numeric. Maximum FDR to keep.}
 }
 \value{
 A `data.table` (possibly empty).
 }
 \description{
-Removes the precursor self-peak (within `ms1_ppm`, skipped when `<= 0`),
-then keeps the top `cor_thresh` groups by correlation, then the top
-`fdr_thresh` of those by FDR — matches the notebook's two-stage ranking.
+Keeps rows whose Pearson correlation is at least `cor_thresh` and
+whose Benjamini-Hochberg FDR is at most `fdr_thresh`. Default filter
+used by [clean_pseudo_spectra()]; swap in your own via that
+function's `filter_fn` argument.
 }
 \keyword{internal}

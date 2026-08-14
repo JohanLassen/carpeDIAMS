@@ -10,13 +10,13 @@ abs_upgma(max_diff = 0.005)
 \item{max_diff}{Numeric. Absolute m/z tolerance in Da.}
 }
 \value{
-A `function(mz, target_mz)` satisfying the grouper contract.
+A grouper closure - see [grouper-contract].
 }
 \description{
-Same backend as [ppm_upgma()], but uses a fixed `max_diff` in Da and
-ignores `target_mz`.
+Same backend as [ppm_upgma()] but with a fixed `max_diff` in Da.
+Uses only `mz`.
 }
 \examples{
 g <- abs_upgma(max_diff = 0.005)
-g(c(100.0, 100.001, 200.0), target_mz = NA)
+g(c(100.0, 100.001, 200.0))
 }

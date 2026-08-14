@@ -7,22 +7,20 @@
 getBackendPeaks(object, fd, sample_filter = NULL)
 }
 \arguments{
-\item{object}{An `XCMSnExp` (only used for the default `all_peaks`).}
+\item{object}{An `XCMSnExp`. Source of `chromPeaks`.}
 
 \item{fd}{`featureDefinitions()` table (rows = features, `peakidx` list-col).}
 
 \item{sample_filter}{Optional integer vector; keep only peaks from these samples.}
-
-\item{all_peaks}{chromPeaks matrix from the parent msobject.}
 }
 \value{
 Named list of chromPeaks-row matrices (one per feature id).
 }
 \description{
 Returns, per feature in `fd`, the matrix of `chromPeaks` rows that belong
-to it (via `peakidx`). `all_peaks` must be the chromPeaks from the parent
-(pre-subset) msobject — subsetting changes row indices and breaks the
-`peakidx` <-> `chromPeaks` invariant. Pass `mssubset$peaks` (from
-[subset_samples_xcms()]).
+to it (via `peakidx`). Reads `xcms::chromPeaks(object)` internally, so
+`object` must be the full msobject that `fd` was built from — subsetting
+the msobject changes row indices and breaks the `peakidx` <->
+`chromPeaks` invariant.
 }
 \keyword{internal}

@@ -7,9 +7,9 @@
 fast_1D_upgma_grouping_cpp(x, maxDiff)
 }
 \arguments{
-\item{maxDiff}{numeric scalar}
+\item{x}{numeric vector of m/z values}
 
-\item{mz}{numeric vector}
+\item{maxDiff}{numeric scalar; maximum absolute difference within a group}
 }
 \value{
 integer vector of group ids

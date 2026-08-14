@@ -81,7 +81,6 @@ batch_get_feature_data <- function(feature_ids, con, chunk_size = 500) {
 #'
 #' @param dt Output of [batch_get_feature_data()] restricted to one feature.
 #' @param mz_target Numeric. Precursor m/z (drives the ppm tolerance).
-#' @param ms2_ppm Numeric. Fragment-mz grouping tolerance in ppm.
 #' @param buffer Integer. Scan window around apex per sample.
 #' @param min_count Integer. Minimum scan-count per group.
 #' @return list(grouped_signal, correlations), or `NULL`.
@@ -102,7 +101,12 @@ process_pseudo_spec <- function(
   dt <- dt[abs(ms1_scan - apex) < buffer]
   if (nrow(dt) == 0) return(NULL)
 
-  dt[, group := grouper(fragment_mz, target_mz = mz_target)]
+  # First pass: raw dt has ms2_scan; pass the full contract.
+  dt[, group := grouper(mz        = fragment_mz,
+                        intensity = int,
+                        target_mz = mz_target,
+                        scan      = ms2_scan,
+                        ms1_int   = ms1_int)]
   dt <- dt[, .(
     int         = sum(int),
     ms1_int     = mean(ms1_int),
@@ -110,7 +114,11 @@ process_pseudo_spec <- function(
     mz          = mean(mz)
   ), by = .(group, sample, ms1_scan)]
 
-  dt[, group := grouper(fragment_mz, target_mz = mz_target)]
+  # Second pass: post-aggregation; ms2_scan was dropped.
+  dt[, group := grouper(mz        = fragment_mz,
+                        intensity = int,
+                        target_mz = mz_target,
+                        ms1_int   = ms1_int)]
   grouped_signal <- dt[, .(
     int         = sum(int),
     ms1_int     = mean(ms1_int),
@@ -159,17 +167,16 @@ process_pseudo_spec <- function(
   list(grouped_signal = grouped_signal, correlations = correlations)
 }
 
-#' Apply self-peak filter and top-N selection to per-group correlations
+#' Filter per-group correlations by correlation + FDR thresholds
 #'
-#' Removes the precursor self-peak (within `ms1_ppm`, skipped when `<= 0`),
-#' then keeps the top `cor_thresh` groups by correlation, then the top
-#' `fdr_thresh` of those by FDR — matches the notebook's two-stage ranking.
+#' Keeps rows whose Pearson correlation is at least `cor_thresh` and
+#' whose Benjamini-Hochberg FDR is at most `fdr_thresh`. Default filter
+#' used by [clean_pseudo_spectra()]; swap in your own via that
+#' function's `filter_fn` argument.
 #'
 #' @param correlations `data.table` from `process_pseudo_spec()$correlations`.
-#' @param mz_target Numeric. Precursor m/z.
-#' @param ms1_ppm Numeric. Tolerance for self-peak filter; `<= 0` skips.
-#' @param cor_thresh Integer. Keep top-N by correlation.
-#' @param fdr_thresh Integer. Then keep top-N of those by FDR.
+#' @param cor_thresh Numeric. Minimum correlation to keep.
+#' @param fdr_thresh Numeric. Maximum FDR to keep.
 #' @return A `data.table` (possibly empty).
 #' @keywords internal
 #' @export
@@ -248,10 +255,13 @@ select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05
 #' @param fd Optional `featureDefinitions()`-shaped frame; supplies
 #'   `mzmed` and `rtmed` per target.
 #' @param con Optional pre-opened connection (else opened + closed internally).
-#' @param ms1_ppm,ms2_ppm Numeric ppm tolerances.
 #' @param buffer,fdr_thresh,cor_thresh,min_count Tunables passed downstream.
 #'   `fdr_thresh` / `cor_thresh` are only consulted by the default
 #'   `filter_fn`; a custom `filter_fn` may ignore them.
+#' @param grouper Grouping of centroids, e.g., [ppm_upgma()]. 
+#'    The function shotake n vectors of length x and return a single vector of length 
+#'    x with the number of unique values < x.  
+#' 
 #' @param filter_fn Function taking a `correlations` `data.table` and
 #'   returning the surviving rows. `NULL` (default) uses
 #'   [select_pseudo_spec()] bound to `cor_thresh` / `fdr_thresh`.
@@ -268,7 +278,6 @@ clean_pseudo_spectra <- function(
   file_directory,
   fd               = NULL,
   con              = NULL,
-  ms1_ppm          = 0,
   grouper          = ppm_upgma(ppm = 30),
   buffer           = 50L,
   fdr_thresh       = 0.01,

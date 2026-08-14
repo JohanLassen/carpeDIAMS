@@ -1,0 +1,353 @@
+---
+title: "Scaling carpeDIAMS across samples (DAG workflow)"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Scaling carpeDIAMS across samples (DAG workflow)}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+This vignette shows how to run carpeDIAMS at scale: one function invocation
+per stage, one process per sample. It is what a DAG runner (Snakemake, gwf,
+Nextflow, plain SLURM arrays) needs to parallelize per-sample work.
+
+If you have one or a few files and just want an MGF, skip to the
+[Interactive one-shot](#interactive-one-shot) section — you never need to
+touch stages.
+
+## The three entry points
+
+carpeDIAMS exposes three input-specific functions and one dispatcher.
+They share thresholds, on-disk contracts, and stage machinery.
+
+| You have                                       | Function              |
+|:-----------------------------------------------|:----------------------|
+| One mzML, exploratory                          | `process_mzml()`      |
+| mzML(s) + a target list of known compounds     | `process_targetlist()`|
+| A grouped `XcmsExperiment` (rds / qs / rda)    | `process_xcms()`      |
+| Any of the above, don't want to remember which | `carpediams()`        |
+
+`carpediams(input, output, targetlist = NULL, ...)` inspects the input
+shape and routes:
+
+- `XcmsExperiment` object, or a `.rds`/`.qs`/`.rda` path → `process_xcms`
+- Any mzML input **with** a `targetlist` → `process_targetlist`
+- A single mzML **without** a `targetlist` → `process_mzml`
+- A directory or vector of mzMLs without a `targetlist` → error (ambiguous)
+
+Everything below uses `carpediams()`; substitute the specific function if
+you prefer to be explicit.
+
+## Interactive one-shot
+
+The default `stage = "all"` runs prepare → per-sample → finalize in a
+single call. `tmp_dir` defaults to an auto-cleaned `tempfile()`.
+
+```{r}
+library(carpeDIAMS)
+
+# route: mzml
+carpediams(
+  input  = "path/to/one.mzML",
+  output = "out/one_features.mgf"
+)
+
+# route: targetlist (one or many mzMLs + a target CSV)
+carpediams(
+  input      = c("path/to/a.mzML", "path/to/b.mzML"),
+  output     = "out/targets.mgf",
+  targetlist = "path/to/targets.csv",   # needs mz and rt columns
+  rt_width   = 20                       # optional tuning
+)
+
+# route: xcms (already grouped)
+carpediams(
+  input  = "path/to/grouped.rds",
+  output = "out/xcms.mgf",
+  ppm    = 20,
+  rt_buffer = 5
+)
+```
+
+For 1-10 samples this is all you need. For 100s-1000s, split into stages.
+
+## Why stages
+
+The interactive path holds every intermediate in one R process — one crash
+or one OOM kills the whole run. The staged path breaks the pipeline into
+three DAG nodes:
+
+```
+[prepare] --> [sample_1]           --> [finalize]
+              [sample_2]  (parallel)
+              ...
+              [sample_N]
+```
+
+- `prepare` runs once. Loads the input, builds the manifest and feature
+  definitions, writes them to `tmp_dir`.
+- `sample` runs N times in parallel. Each call is independent and only
+  needs `tmp_dir` + `sample_idx`.
+- `finalize` runs once at the end. Reads all `sample_*_*.parquet` files,
+  filters, exports MGF.
+
+A single failed sample only reruns that sample. Nothing else re-executes.
+
+## On-disk contract
+
+Both `process_xcms` and `process_targetlist` write these files under
+`tmp_dir`:
+
+| Path                                        | Written by  | Read by                | Content                                                        |
+|:--------------------------------------------|:------------|:-----------------------|:---------------------------------------------------------------|
+| `<tmp_dir>/manifest.csv`                    | `prepare`   | `sample`, `finalize`   | CSV with `sample_idx, filename` — DAG-friendly, language-agnostic |
+| `<tmp_dir>/fd.rds`                          | `prepare`   | `sample`, `finalize`   | Feature-definition frame (`feature_id`, `mzmed`, `rtmed`)      |
+| `<tmp_dir>/mssubset.rds` (xcms route only)  | `prepare`   | `sample`               | Output of `subset_samples_xcms()` — subsetted `XcmsExperiment` |
+| `<tmp_dir>/sample_<idx>_pool.parquet`       | `sample`    | `finalize`             | MS2 fragments for sample `<idx>`                              |
+| `<tmp_dir>/sample_<idx>_pointers.parquet`   | `sample`    | `finalize`             | Feature × MS1-scan pointers for sample `<idx>`                |
+| `<tmp_dir>/.duckdb_tmp/`                    | `finalize`  | `finalize`             | DuckDB spill files (auto-cleaned)                             |
+
+`<idx>` is the integer sample index in `manifest.csv`. Split-stage runs
+**must share the same `tmp_dir`**.
+
+## Split-stage walkthrough (xcms route)
+
+Same three commands whether you run them by hand in R, from a Snakemake
+rule, or from a shell script.
+
+### 1. Prepare
+
+```{r}
+tmp_dir <- "work/carpediams_run1"   # DAG picks this; not a tempdir
+
+carpediams(
+  input   = "path/to/grouped.rds",
+  output  = NULL,                   # not needed until finalize
+  tmp_dir = tmp_dir,
+  stage   = "prepare",
+  subsample = FALSE                 # or TRUE with subset_size for 1000s of samples
+)
+
+# Inspect what was written
+list.files(tmp_dir)
+#> [1] "fd.rds" "manifest.csv" "mssubset.rds"
+
+manifest <- read.csv(file.path(tmp_dir, "manifest.csv"))
+head(manifest)
+#>   sample_idx                       filename
+#> 1          1  /faststorage/.../sample_a.mzML
+#> 2          2  /faststorage/.../sample_b.mzML
+#> ...
+```
+
+`manifest.csv` is what the DAG uses to enumerate `sample` jobs.
+
+### 2. Per-sample (parallel)
+
+Each call is fully independent. In R for demonstration:
+
+```{r}
+for (sid in manifest$sample_idx) {
+  carpediams(
+    input   = NULL,                 # ignored at sample stage
+    output  = NULL,                 # ditto
+    tmp_dir = tmp_dir,
+    stage   = "sample",
+    sample_idx = sid,
+    ppm       = 20,
+    rt_buffer = 5,
+    top_n     = 10
+  )
+}
+
+# Two parquets per sample now exist
+list.files(tmp_dir, pattern = "^sample_")
+#> [1] "sample_1_pointers.parquet" "sample_1_pool.parquet"
+#> [3] "sample_2_pointers.parquet" "sample_2_pool.parquet"
+#> ...
+```
+
+Under a DAG, each `sample_idx` becomes one job — they run concurrently.
+
+Parameters that affect per-sample work (`ppm`, `rt_buffer`, `top_n`) are
+passed at the `sample` stage. If you change them between samples, the
+outputs will be inconsistent — pass the same values to every sample job.
+
+### 3. Finalize
+
+```{r}
+carpediams(
+  input   = NULL,                   # ignored at finalize
+  output  = "out/xcms.mgf",
+  tmp_dir = tmp_dir,
+  stage   = "finalize",
+  ppm         = 20,
+  fdr_thresh  = 0.1,
+  cor_thresh  = 0.1,
+  min_count   = 10L,
+  ion_mode    = "POSITIVE"
+)
+#> ✔ Done: N fragments across M features -> out/xcms.mgf
+```
+
+The MGF is now at `out/xcms.mgf`. `tmp_dir` still holds the parquets —
+delete when you're happy with the output.
+
+## Sample addressing: idx vs. file
+
+`sample` stage accepts either:
+
+- **`sample_idx = <int>`** — 1-based position in `manifest$sample_idx`.
+  Simplest for DAG-generated job arrays.
+- **`sample_file = "<basename.mzML>"`** — basename of the mzML. Resolved
+  against `manifest.csv`. Robust if you reorder files between prepare
+  runs (basenames stay stable; positional idx doesn't).
+
+```{r}
+# either works
+carpediams(input = NULL, tmp_dir = tmp_dir, stage = "sample",
+           sample_idx  = 3)
+carpediams(input = NULL, tmp_dir = tmp_dir, stage = "sample",
+           sample_file = "sample_c.mzML")
+```
+
+For DAG determinism, prefer passing your input as an explicit character
+vector (stable order) over a directory glob — otherwise `sample_idx = 3`
+means different files across `prepare` runs.
+
+## Parallel per-sample in one R process
+
+If you don't have a full DAG runner but want per-sample parallelism, use
+`furrr` (or `parallel::mclapply`, or `future.batchtools` for SLURM):
+
+```{r}
+library(furrr)
+plan(multisession, workers = 8)
+
+# Prepare once
+carpediams(input = "path/to/grouped.rds", tmp_dir = tmp_dir, stage = "prepare")
+manifest <- read.csv(file.path(tmp_dir, "manifest.csv"))
+
+# Sample stage in parallel
+future_walk(manifest$sample_idx, function(sid) {
+  carpediams(
+    input = NULL, tmp_dir = tmp_dir, stage = "sample",
+    sample_idx = sid, ppm = 20, rt_buffer = 5
+  )
+})
+
+# Finalize
+carpediams(input = NULL, tmp_dir = tmp_dir, output = "out/xcms.mgf",
+           stage = "finalize", ppm = 20)
+```
+
+`multisession` avoids fork-safety issues with the DuckDB / arrow /
+reticulate stack; `multicore` on Linux is faster but riskier here.
+
+## DAG sketch (Snakemake)
+
+Pseudocode — swap paths for your setup. The key point is that
+`sample_idx` values come from `manifest.csv` **after** `prepare` runs, so
+the DAG needs a two-phase evaluation (Snakemake calls this a
+[checkpoint](https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#data-dependent-conditional-execution)).
+
+```{python, eval = FALSE}
+INPUT   = "path/to/grouped.rds"
+OUTPUT  = "out/xcms.mgf"
+TMPDIR  = "work/carpediams_run1"
+
+checkpoint prepare:
+    input:  INPUT
+    output: manifest = f"{TMPDIR}/manifest.csv"
+    shell:
+        "Rscript -e '"
+        "carpeDIAMS::carpediams("
+        f"  input = \"{{input}}\","
+        f"  tmp_dir = \"{TMPDIR}\","
+        "  stage = \"prepare\")'"
+
+rule sample:
+    input:  manifest = f"{TMPDIR}/manifest.csv"
+    output:
+        pool = f"{TMPDIR}/sample_{{sid}}_pool.parquet",
+        ptrs = f"{TMPDIR}/sample_{{sid}}_pointers.parquet"
+    shell:
+        "Rscript -e '"
+        "carpeDIAMS::carpediams("
+        f"  input = NULL, tmp_dir = \"{TMPDIR}\","
+        "  stage = \"sample\", sample_idx = {wildcards.sid},"
+        "  ppm = 20, rt_buffer = 5)'"
+
+def sample_ids(wildcards):
+    ck = checkpoints.prepare.get()
+    import csv
+    with open(ck.output.manifest) as f:
+        return [row["sample_idx"] for row in csv.DictReader(f)]
+
+rule finalize:
+    input:
+        lambda wc: expand(f"{TMPDIR}/sample_{{sid}}_pool.parquet",
+                          sid = sample_ids(wc))
+    output: OUTPUT
+    shell:
+        "Rscript -e '"
+        "carpeDIAMS::carpediams("
+        "  input = NULL,"
+        f"  tmp_dir = \"{TMPDIR}\","
+        f"  output = \"{{output}}\","
+        "  stage = \"finalize\", ppm = 20)'"
+```
+
+For gwf, the pattern is the same — one template per stage, with the
+`sample` template templated over `manifest.csv` after prepare completes.
+
+## Failure and resumption
+
+Because the stages communicate only through `tmp_dir`, recovery is
+mechanical:
+
+- **A `sample` job crashed** → rerun it with the same `sample_idx`. It
+  overwrites the two parquets. Other samples aren't touched. DAG runners
+  do this automatically on retry.
+- **`finalize` failed after all samples succeeded** → rerun `finalize`
+  only. No per-sample work re-executes.
+- **Filter parameters wrong** (0 features in the MGF) → rerun `finalize`
+  with different `fdr_thresh` / `cor_thresh`. The parquets are the
+  expensive part and stay intact.
+- **Prepare parameters wrong** (`subsample`, `subset_size`) → delete
+  `tmp_dir` and start over. This is the one destructive reset.
+
+Sanity check between stages:
+
+```{r}
+# after prepare
+file.exists(file.path(tmp_dir, c("manifest.csv", "fd.rds")))
+
+# after all sample jobs
+manifest <- read.csv(file.path(tmp_dir, "manifest.csv"))
+expected <- c(sprintf("sample_%d_pool.parquet",     manifest$sample_idx),
+              sprintf("sample_%d_pointers.parquet", manifest$sample_idx))
+setdiff(expected, list.files(tmp_dir))   # empty vector = all present
+```
+
+## Cleanup
+
+`tmp_dir` from `stage = "all"` is auto-cleaned. Split-stage runs own
+their `tmp_dir` — delete when the MGF is validated:
+
+```{r}
+unlink(tmp_dir, recursive = TRUE)
+```
+
+## See also
+
+- `?carpediams` — dispatcher and full argument reference.
+- `?process_xcms`, `?process_targetlist`, `?process_mzml` — route-specific
+  details.
+- `?clean_pseudo_spectra` — thresholds and the `filter_fn` /
+  `grouper` hooks for research-swappable behavior (covered in the
+  developer vignette when it lands).

@@ -8,6 +8,19 @@
 #' @useDynLib carpeDIAMS, .registration = TRUE
 #' @importFrom Rcpp sourceCpp
 #' @importFrom data.table data.table := .I .SD setDT setkey
+#' @import arrow
+#' @import cli
+#' @import DBI
+#' @import dplyr
+#' @import duckdb
+#' @import MsExperiment
+#' @import purrr
+#' @import readr
+#' @import reticulate
+#' @import Spectra
+#' @import tibble
+#' @import tidyr
+#' @import xcms
 "_PACKAGE"
 
 utils::globalVariables(c(

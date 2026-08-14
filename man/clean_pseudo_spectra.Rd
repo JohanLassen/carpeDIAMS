@@ -9,7 +9,6 @@ clean_pseudo_spectra(
   file_directory,
   fd = NULL,
   con = NULL,
-  ms1_ppm = 0,
   grouper = ppm_upgma(ppm = 30),
   buffer = 50L,
   fdr_thresh = 0.01,
@@ -33,7 +32,9 @@ clean_pseudo_spectra(
 
 \item{con}{Optional pre-opened connection (else opened + closed internally).}
 
-\item{ms1_ppm, ms2_ppm}{Numeric ppm tolerances.}
+\item{grouper}{Grouping of centroids, e.g., [ppm_upgma()]. 
+The function shotake n vectors of length x and return a single vector of length 
+x with the number of unique values < x.}
 
 \item{buffer, fdr_thresh, cor_thresh, min_count}{Tunables passed downstream.
 `fdr_thresh` / `cor_thresh` are only consulted by the default

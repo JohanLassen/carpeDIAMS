@@ -20,8 +20,6 @@ process_pseudo_spec(
 \item{buffer}{Integer. Scan window around apex per sample.}
 
 \item{min_count}{Integer. Minimum scan-count per group.}
-
-\item{ms2_ppm}{Numeric. Fragment-mz grouping tolerance in ppm.}
 }
 \value{
 list(grouped_signal, correlations), or `NULL`.

@@ -7,22 +7,27 @@
 validate_grouper(
   grouper,
   mz_example = c(100, 100.001, 100.5, 200),
-  target_mz = 100
+  intensity = c(1000, 800, 200, 5000),
+  target_mz = 100,
+  scan = c(1L, 1L, 2L, 2L),
+  ms1_int = c(5000, 5000, 4000, 4000)
 )
 }
 \arguments{
-\item{grouper}{A function with signature `function(mz, target_mz)`.}
+\item{grouper}{A function conforming to [grouper-contract].}
 
 \item{mz_example}{Numeric vector to probe with.}
 
-\item{target_mz}{Numeric scalar passed to the grouper.}
+\item{intensity, target_mz, scan, ms1_int}{Probe values for groupers
+that require them; defaults are sensible synthetic inputs.}
 }
 \value{
 Invisibly `TRUE` when valid; throws otherwise.
 }
 \description{
-Calls `grouper(mz_example, target_mz)` and asserts that the result is the
-right length and has no more unique values than the input. Use this once
-when wiring up a custom grouper; do not call inside hot loops.
+Probes a grouper with small example vectors and asserts the return
+has one integer per input and no more groups than distinct m/z
+values. Use once when wiring up a custom grouper; do not call inside
+hot loops.
 }
 \keyword{internal}
