@@ -17,6 +17,7 @@
 #' @import purrr
 #' @import readr
 #' @import reticulate
+#' @import S4Vectors
 #' @import Spectra
 #' @import tibble
 #' @import tidyr

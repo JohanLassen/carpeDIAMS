@@ -13,6 +13,7 @@ Imports:
     xcms,
     Spectra,
     MsExperiment,
+    S4Vectors,
     data.table,
     arrow,
     dplyr,

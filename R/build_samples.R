@@ -47,35 +47,23 @@ getBackendPeaks <- function(object, fd, sample_filter = NULL) {
 #' @noRd
 get_scans_optimized <- function(feature_id, dataOrigin, rtmin, rtmax, rt, sample, mz, spectra_list) {
   file_spectra <- spectra_list[[dataOrigin]]
-
   if (is.null(file_spectra)) return(NULL)
-  
-  if ("rtime_adjusted" %in% colnames(file_spectra)) {
-    in_range <- file_spectra$rtime_adjusted >= rtmin &
-      file_spectra$rtime_adjusted <= rtmax
-    apex_idx <- which.min(abs(window$rtime_adjusted - rt))
-  } else {
-    in_range <- file_spectra$rtime >= rtmin &
-      file_spectra$rtime <= rtmax
-    apex_idx <- rt
-  }
 
-  window <- file_spectra[in_range, ]
-
+  rt_col   <- if ("rtime_adjusted" %in% colnames(file_spectra)) "rtime_adjusted" else "rtime"
+  in_range <- file_spectra[[rt_col]] >= rtmin & file_spectra[[rt_col]] <= rtmax
+  window   <- file_spectra[in_range, ]
   if (nrow(window) == 0) return(NULL)
-  
-  
 
-  return(
-    list(
-      sample = sample,
-      filename = dataOrigin,
-      mz = mz,
-      feature = feature_id,
-      scan_indices = window$acquisitionNum,
-      apex_scan_index = window$acquisitionNum[apex_idx],
-      n_scans = nrow(window)
-    )
+  apex_idx <- which.min(abs(window[[rt_col]] - rt))
+
+  list(
+    sample          = sample,
+    filename        = dataOrigin,
+    mz              = mz,
+    feature         = feature_id,
+    scan_indices    = window$acquisitionNum,
+    apex_scan_index = window$acquisitionNum[apex_idx],
+    n_scans         = nrow(window)
   )
 }
 

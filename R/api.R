@@ -17,6 +17,7 @@ process_mzml <- function(path, tmp_dir, output = NULL, rt_range = c(30, 1200)){
 
     sps <- Spectra(path, backend = MsBackendMzR()) |> Spectra::filterRt(rt_range)
     if (length(sps) == 0) cli::cli_abort("No spectra in RT window.")
+    if (output == NULL) cli::cli_abort("No output provided.")
 
     # --- bbCID: assign MS2 by frame structure if not already annotated ---
     if (!2 %in% Spectra::msLevel(sps)) {
@@ -76,7 +77,7 @@ process_mzml <- function(path, tmp_dir, output = NULL, rt_range = c(30, 1200)){
         cor_thresh     = 0.1,
         min_count      = 10L,
         report         = FALSE,
-        mgf_dir        = tmp_dir,
+        mgf_dir        = NULL,
         progress       = TRUE
         )
 
@@ -114,6 +115,9 @@ process_mzml <- function(path, tmp_dir, output = NULL, rt_range = c(30, 1200)){
 #'   \item `<tmp_dir>/sample_<idx>_pool.parquet`,
 #'         `<tmp_dir>/sample_<idx>_pointers.parquet` — one pair per
 #'     sample (written by [Ms2PseudoRaw()] via [build_parquets_xcms()]).
+#'   \item `<tmp_dir>/features_batch_<i>.parquet` — one per `filter`
+#'     batch (present only when the batched path is used; `finalize`
+#'     auto-detects and aggregates them).
 #' }
 #'
 #' Split-stage runs must share the same `tmp_dir`.
@@ -126,11 +130,16 @@ process_mzml <- function(path, tmp_dir, output = NULL, rt_range = c(30, 1200)){
 #'   only allowed for `stage = "all"` (creates + cleans a `tempfile`).
 #'   Required otherwise.
 #' @param stage One of `"all"` (default, interactive), `"prepare"`,
-#'   `"sample"`, `"finalize"`.
+#'   `"sample"`, `"filter"`, `"finalize"`. `"filter"` is the batched
+#'   scale-out path (see `batch_idx`); `"finalize"` auto-aggregates any
+#'   batch parquets if present, else runs everything in-process.
 #' @param sample_idx Integer index into `manifest$sample_idx` for
 #'   `stage = "sample"`. Takes precedence over `sample_file`.
 #' @param sample_file Basename of an mzML for `stage = "sample"`;
 #'   resolved to an idx via the manifest.
+#' @param batch_idx,n_batches For `stage = "filter"`: split `targets`
+#'   into `n_batches` contiguous chunks and process chunk `batch_idx`
+#'   (1-based). One `filter` DAG job per batch; `finalize` unions them.
 #' @param subsample Logical. When `TRUE`, apricot picks `subset_size`
 #'   representative samples; `FALSE` (default) uses every sample.
 #' @param subset_size,q_prob Passed to [subset_samples_xcms()] when
@@ -155,7 +164,7 @@ process_xcms <- function(
     input,
     output     = NULL,
     tmp_dir    = NULL,
-    stage      = c("all", "prepare", "sample", "finalize"),
+    stage      = c("all", "prepare", "sample", "filter", "finalize"),
     sample_idx = NULL,
     sample_file = NULL,
     subsample  = FALSE,
@@ -168,6 +177,8 @@ process_xcms <- function(
     fdr_thresh = 0.1,
     cor_thresh = 0.1,
     min_count  = 10L,
+    batch_idx  = NULL,
+    n_batches  = 1L,
     ion_mode   = "POSITIVE",
     ...
 ) {
@@ -201,6 +212,13 @@ process_xcms <- function(
             cli::cli_progress_update()
         }
         cli::cli_progress_done()
+    }
+
+    if (stage == "filter") {
+        if (is.null(batch_idx))
+            cli::cli_abort("stage = {.val filter} requires {.arg batch_idx}.")
+        .filter_stage(tmp_dir, batch_idx, n_batches, grouper,
+                      fdr_thresh, cor_thresh, min_count, ...)
     }
 
     if (stage %in% c("all", "finalize")) {
@@ -299,21 +317,32 @@ process_xcms <- function(
 .finalize_stage <- function(tmp_dir, output, ppm, grouper,
                             fdr_thresh, cor_thresh, min_count,
                             ion_mode, ...) {
-    fd <- readRDS(file.path(tmp_dir, "fd.rds"))
-    cli::cli_progress_step("Filtering pseudo-spectra ({nrow(fd)} features)")
-    cleaned <- clean_pseudo_spectra(
-        targets        = rownames(fd),
-        file_directory = tmp_dir,
-        fd             = fd,
-        grouper        = grouper,
-        fdr_thresh     = fdr_thresh,
-        cor_thresh     = cor_thresh,
-        min_count      = min_count,
-        report         = FALSE,
-        mgf_dir        = NULL,
-        progress       = FALSE,
-        ...
-    )
+    fd      <- readRDS(file.path(tmp_dir, "fd.rds"))
+    batches <- list.files(tmp_dir, pattern = "^features_batch_.*\\.parquet$",
+                          full.names = TRUE)
+
+    if (length(batches)) {
+        cli::cli_progress_step("Combining {length(batches)} filter batch{?s}")
+        cleaned <- data.table::rbindlist(
+            lapply(batches, arrow::read_parquet),
+            fill = TRUE
+        )
+    } else {
+        cli::cli_progress_step("Filtering pseudo-spectra ({nrow(fd)} features)")
+        cleaned <- clean_pseudo_spectra(
+            targets        = rownames(fd),
+            file_directory = tmp_dir,
+            fd             = fd,
+            grouper        = grouper,
+            fdr_thresh     = fdr_thresh,
+            cor_thresh     = cor_thresh,
+            min_count      = min_count,
+            report         = FALSE,
+            mgf_dir        = NULL,
+            progress       = FALSE,
+            ...
+        )
+    }
 
     cli::cli_progress_step("Writing MGF to {.file {output}}")
     dir.create(dirname(output), showWarnings = FALSE, recursive = TRUE)
@@ -322,6 +351,37 @@ process_xcms <- function(
     cli::cli_progress_done()
     cli::cli_alert_success(
         "Done: {nrow(cleaned)} fragments across {length(unique(cleaned$feature_id))} feature{?s} -> {.file {output}}")
+    invisible(cleaned)
+}
+
+#' @keywords internal
+#' @noRd
+.filter_stage <- function(tmp_dir, batch_idx, n_batches, grouper,
+                          fdr_thresh, cor_thresh, min_count, ...) {
+    fd <- readRDS(file.path(tmp_dir, "fd.rds"))
+    cli::cli_progress_step(
+        "Filtering pseudo-spectra (batch {batch_idx}/{n_batches})")
+    cleaned <- clean_pseudo_spectra(
+        targets        = rownames(fd),
+        file_directory = tmp_dir,
+        fd             = fd,
+        grouper        = grouper,
+        fdr_thresh     = fdr_thresh,
+        cor_thresh     = cor_thresh,
+        min_count      = min_count,
+        batch_idx      = batch_idx,
+        n_batches      = n_batches,
+        report         = FALSE,
+        mgf_dir        = NULL,
+        progress       = TRUE,
+        ...
+    )
+    out_path <- file.path(tmp_dir,
+                          sprintf("features_batch_%d.parquet", as.integer(batch_idx)))
+    arrow::write_parquet(cleaned, out_path)
+    cli::cli_progress_done()
+    cli::cli_alert_success(
+        "Wrote batch {batch_idx}/{n_batches}: {nrow(cleaned)} row{?s} -> {.path {out_path}}")
     invisible(cleaned)
 }
 
@@ -366,9 +426,14 @@ process_xcms <- function(
 #'   `feature`), or a data.frame with the same shape.
 #' @param tmp_dir Working directory. `NULL` only for `stage = "all"`
 #'   (creates + cleans a `tempfile`); required otherwise.
-#' @param stage One of `"all"`, `"prepare"`, `"sample"`, `"finalize"`.
+#' @param stage One of `"all"`, `"prepare"`, `"sample"`, `"filter"`,
+#'   `"finalize"`. `"filter"` is the batched scale-out path;
+#'   `"finalize"` auto-aggregates batch parquets if present.
 #' @param sample_idx,sample_file Sample addressing for
 #'   `stage = "sample"`; idx is 1-based into `manifest`.
+#' @param batch_idx,n_batches For `stage = "filter"`: split `targets`
+#'   into `n_batches` contiguous chunks and process chunk `batch_idx`
+#'   (1-based). One `filter` DAG job per batch; `finalize` unions them.
 #' @param ppm Fragment/precursor tolerance in ppm.
 #' @param rt_width Total width (seconds) of the RT window around each
 #'   target's `rt` when extracting scans.
@@ -386,7 +451,7 @@ process_targetlist <- function(
     output      = NULL,
     targetlist  = NULL,
     tmp_dir     = NULL,
-    stage       = c("all", "prepare", "sample", "finalize"),
+    stage       = c("all", "prepare", "sample", "filter", "finalize"),
     sample_idx  = NULL,
     sample_file = NULL,
     ppm         = 20,
@@ -395,6 +460,8 @@ process_targetlist <- function(
     fdr_thresh  = 0.1,
     cor_thresh  = 0.1,
     min_count   = 10L,
+    batch_idx   = NULL,
+    n_batches   = 1L,
     ion_mode    = "POSITIVE",
     ...
 ) {
@@ -431,6 +498,13 @@ process_targetlist <- function(
             cli::cli_progress_update()
         }
         cli::cli_progress_done()
+    }
+
+    if (stage == "filter") {
+        if (is.null(batch_idx))
+            cli::cli_abort("stage = {.val filter} requires {.arg batch_idx}.")
+        .filter_stage(tmp_dir, batch_idx, n_batches, grouper,
+                      fdr_thresh, cor_thresh, min_count, ...)
     }
 
     if (stage %in% c("all", "finalize")) {

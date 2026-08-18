@@ -267,6 +267,10 @@ select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05
 #'   [select_pseudo_spec()] bound to `cor_thresh` / `fdr_thresh`.
 #'   Provide your own to swap in a different significance/selection
 #'   scheme (research-swappable — same role as `grouper`).
+#' @param batch_idx,n_batches Optional slice: process only batch
+#'   `batch_idx` of `n_batches` equal contiguous chunks of `targets`.
+#'   `batch_idx = NULL` (default) processes every target in-process.
+#'   Set both for the DAG-batched `stage = "filter"` path.
 #' @param report,report_path PDF diagnostic report on/off + path.
 #' @param mgf_dir Optional directory for per-feature MGFs.
 #' @param fetch_chunk_size Features per DuckDB query.
@@ -284,12 +288,22 @@ clean_pseudo_spectra <- function(
   cor_thresh       = 0.3,
   min_count        = 10L,
   filter_fn        = NULL,
+  batch_idx        = NULL,
+  n_batches        = 1L,
   report           = TRUE,
   report_path      = "pseudo_specs_report.pdf",
   mgf_dir          = NULL,
   fetch_chunk_size = 200L,
   progress         = TRUE
 ) {
+  if (!is.null(batch_idx)) {
+    per_batch <- ceiling(length(targets) / n_batches)
+    my_start  <- 1L + (as.integer(batch_idx) - 1L) * per_batch
+    my_end    <- min(as.integer(batch_idx) * per_batch, length(targets))
+    if (my_start > length(targets)) return(data.table::data.table())
+    targets <- targets[my_start:my_end]
+  }
+
   if (is.null(filter_fn))
     filter_fn <- function(correlations)
       select_pseudo_spec(correlations, cor_thresh, fdr_thresh)
@@ -318,20 +332,27 @@ clean_pseudo_spectra <- function(
   has_fd <- !is.null(fd_df)
 
   total <- length(targets)
-  done  <- 0L
   fetch_chunks <- split(targets, ceiling(seq_along(targets) / fetch_chunk_size))
+
+  pb_env <- environment()
+  if (progress) {
+    cli::cli_progress_bar(
+      total  = total,
+      format = "  {cli::pb_bar} {cli::pb_current}/{cli::pb_total}  {cli::pb_percent}  ETA {cli::pb_eta}  {cli::pb_status}",
+      .envir = pb_env
+    )
+  }
 
   results <- data.table::rbindlist(lapply(fetch_chunks, function(chunk_ids) {
     raw <- batch_get_feature_data(chunk_ids, con, chunk_size = length(chunk_ids))
     if (nrow(raw) == 0) {
-      done <<- done + length(chunk_ids)
+      if (progress) cli::cli_progress_update(inc = length(chunk_ids), .envir = pb_env)
       return(NULL)
     }
     by_feature <- split(raw, by = "feature")
 
     data.table::rbindlist(lapply(chunk_ids, function(target) {
-      done <<- done + 1L
-      if (progress) cat(sprintf("\r  [%d/%d] %s         ", done, total, target))
+      if (progress) cli::cli_progress_update(status = target, .envir = pb_env)
 
       dt <- by_feature[[target]]
       if (is.null(dt) || nrow(dt) == 0) return(NULL)
@@ -400,6 +421,6 @@ clean_pseudo_spectra <- function(
     }), fill = TRUE)
   }), fill = TRUE)
 
-  if (progress) cat("\n")
+  if (progress) cli::cli_progress_done(.envir = pb_env)
   results
 }
