@@ -3,7 +3,9 @@
 #' Each file is a complete `BEGIN IONS ... END IONS` — merge with
 #' `cat <dir>/*.mgf > combined.mgf`.
 #'
-#' @param pseudo_spec Output of [select_pseudo_spec()] (or a subset).
+#' @param pseudo_spec Per-group summary for one feature — the output of a
+#'   [filter-contract] closure (as returned by [clean_pseudo_spectra()]'s
+#'   inner loop); must have `fragment_mz` and `int` columns.
 #' @param mz_target Numeric. Precursor m/z.
 #' @param feature_id Used as `TITLE=`.
 #' @param path Output `.mgf` path.

@@ -7,7 +7,9 @@
 write_simple_mgf(pseudo_spec, mz_target, feature_id, path, rt = NA_real_)
 }
 \arguments{
-\item{pseudo_spec}{Output of [select_pseudo_spec()] (or a subset).}
+\item{pseudo_spec}{Per-group summary for one feature — the output of a
+[filter-contract] closure (as returned by [clean_pseudo_spectra()]'s
+inner loop); must have `fragment_mz` and `int` columns.}
 
 \item{mz_target}{Numeric. Precursor m/z.}
 

@@ -74,133 +74,108 @@ batch_get_feature_data <- function(feature_ids, con, chunk_size = 500) {
 
 
 
-#' Build a feature's pseudo-spectrum from its raw MS1+MS2 data.table
+#' Build a feature's per-group statistics table from raw MS1+MS2 data.table
 #'
-#' Per-sample apex window → two-pass ppm-UPGMA grouping → per-group
-#' Pearson correlation of summed MS2 vs MS1 + BH FDR.
+#' Per-sample apex window (buffer) → first grouper pass on raw
+#' `fragment_mz` → aggregation to per-first-pass-group mean m/z → second
+#' grouper pass (merges neighbours that scan-to-scan m/z jitter would
+#' otherwise split) → statistics closure returns the full per-group
+#' summary. No thresholding — see [clean_pseudo_spectra()] for the
+#' composition with a [filter-contract] closure.
+#'
+#' The `(group, sample, ms1_scan)` aggregation computed inside the
+#' statistics closure is attached to the return value as attribute
+#' `"grouped_signal"` so downstream code (diagnostic plots) can reuse it
+#' without a second groupby.
 #'
 #' @param dt Output of [batch_get_feature_data()] restricted to one feature.
 #' @param mz_target Numeric. Precursor m/z (drives the ppm tolerance).
-#' @param buffer Integer. Scan window around apex per sample.
-#' @param min_count Integer. Minimum scan-count per group.
-#' @return list(grouped_signal, correlations), or `NULL`.
+#' @param grouper A grouper closure - see [grouper-contract].
+#' @param group_statistics_fn A statistics closure - see [stats-contract].
+#' @param buffer Integer. Scan window around each sample's MS1 apex.
+#' @return A per-group summary `data.table` (see [stats-contract]) with
+#'   one row per group, plus a `grouped_signal` attribute
+#'   (aggregated `(group, sample, ms1_scan)`) used by the diagnostic report.
 #' @keywords internal
 #' @export
 process_pseudo_spec <- function(
   dt,
   mz_target,
-  grouper   = ppm_upgma(ppm = 30),
-  buffer    = 50L,
-  min_count = 10L
+  grouper             = ppm_upgma(ppm = 30),
+  group_statistics_fn = correlation_statistics(),
+  buffer              = 50L
 ) {
-  if (nrow(dt) == 0) return(NULL)
+  if (nrow(dt) == 0) return(.empty_correlations())
   dt <- dt[!is.na(int) & !is.na(fragment_mz)]
-  if (nrow(dt) == 0) return(NULL)
+  if (nrow(dt) == 0) return(.empty_correlations())
 
   dt[, apex := ms1_scan[which.max(ms1_int)], by = sample]
   dt <- dt[abs(ms1_scan - apex) < buffer]
-  if (nrow(dt) == 0) return(NULL)
+  if (nrow(dt) == 0) return(.empty_correlations())
 
-  # First pass: raw dt has ms2_scan; pass the full contract.
+  # first grouping pass — on raw per-scan fragment_mz
   dt[, group := grouper(mz        = fragment_mz,
                         intensity = int,
                         target_mz = mz_target,
                         scan      = ms2_scan,
                         ms1_int   = ms1_int)]
-  dt <- dt[, .(
-    int         = sum(int),
-    ms1_int     = mean(ms1_int),
-    fragment_mz = mean(fragment_mz),
-    mz          = mean(mz)
-  ), by = .(group, sample, ms1_scan)]
 
-  # Second pass: post-aggregation; ms2_scan was dropped.
-  dt[, group := grouper(mz        = fragment_mz,
-                        intensity = int,
-                        target_mz = mz_target,
-                        ms1_int   = ms1_int)]
-  grouped_signal <- dt[, .(
-    int         = sum(int),
-    ms1_int     = mean(ms1_int),
-    fragment_mz = mean(fragment_mz),
-    mz          = mean(mz)
-  ), by = .(group, sample, ms1_scan)]
+  # second pass — on per-group mean m/z; neighbours split by
+  # scan-to-scan m/z jitter get re-merged. The aggregation drops
+  # scan/ms1_int, so groupers that require those are single-pass by
+  # necessity — the second call still receives them as NULL.
+  group_means <- dt[, .(fragment_mz = mean(fragment_mz),
+                        intensity   = sum(int)),
+                    by = .(group_first = group)]
+  group_means[, group := grouper(mz        = fragment_mz,
+                                 intensity = intensity,
+                                 target_mz = mz_target)]
+  dt[group_means, on = .(group = group_first), group := i.group]
 
-  group_counts <- grouped_signal[, .(count = .N), by = group][count > min_count]
-  if (nrow(group_counts) == 0) {
-    return(list(grouped_signal = grouped_signal, correlations = data.table::data.table()))
-  }
-
-  cor_results <- grouped_signal[group %in% group_counts$group, {
-    n <- .N
-    if (n < 3L) {
-      list(p_value = NA_real_, correlation = NA_real_)
-    } else {
-      xc <- int - mean(int)
-      yc <- ms1_int - mean(ms1_int)
-      denom <- sqrt(sum(xc * xc) * sum(yc * yc))
-      if (denom == 0) {
-        list(p_value = NA_real_, correlation = NA_real_)
-      } else {
-        r <- max(-1, min(1, sum(xc * yc) / denom))
-        if (abs(r) >= 1) {
-          list(p_value = 0, correlation = r)
-        } else {
-          tval <- r * sqrt((n - 2L) / (1 - r * r))
-          list(p_value = 2 * stats::pt(-abs(tval), df = n - 2L), correlation = r)
-        }
-      }
-    }
-  }, by = group]
-
-  group_summary <- grouped_signal[group %in% group_counts$group, .(
-    fragment_mz = mean(fragment_mz),
-    mz          = mean(mz),
-    int         = mean(int),
-    ms1_int     = mean(ms1_int)
-  ), by = group]
-
-  correlations <- merge(group_summary, cor_results, by = "group")
-  correlations <- merge(correlations, group_counts, by = "group")
-  correlations[, fdr := stats::p.adjust(p_value, method = "fdr")]
-
-  list(grouped_signal = grouped_signal, correlations = correlations)
+  group_statistics_fn(dt)
 }
 
-#' Filter per-group correlations by correlation + FDR thresholds
+#' Legacy per-group thresholder (superseded by [correlation_filtering()])
 #'
-#' Keeps rows whose Pearson correlation is at least `cor_thresh` and
-#' whose Benjamini-Hochberg FDR is at most `fdr_thresh`. Default filter
-#' used by [clean_pseudo_spectra()]; swap in your own via that
-#' function's `filter_fn` argument.
+#' Kept as an internal convenience for old scripts. New code should use
+#' `correlation_filtering(cor_thresh, fdr_thresh)` — a [filter-contract]
+#' closure that composes with [process_pseudo_spec()] via
+#' [clean_pseudo_spectra()]'s `filter_fn` argument.
 #'
-#' @param correlations `data.table` from `process_pseudo_spec()$correlations`.
+#' @param correlations Per-group summary from a [stats-contract] closure
+#'   (typically [correlation_statistics()]).
 #' @param cor_thresh Numeric. Minimum correlation to keep.
 #' @param fdr_thresh Numeric. Maximum FDR to keep.
 #' @return A `data.table` (possibly empty).
 #' @keywords internal
-#' @export
 select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05) {
   if (nrow(correlations) == 0) return(correlations)
-  out <- correlations
-  out <- out[correlation >= cor_thresh]
-  out <- out[fdr <= fdr_thresh]
-  out
+  correlations[correlation >= cor_thresh & fdr <= fdr_thresh]
 }
 
 #' Internal: diagnostic plots for one pseudo-spectrum (ggplot2-gated).
-#' Returns `list()` when ggplot2 is unavailable.
+#' Returns `list()` when ggplot2 is unavailable or there is nothing to plot.
+#'
+#' `stats` is the full per-group stats table (before filtering); `pseudo_spec`
+#' is the post-filter subset. `grouped_signal` is the per-`(group, sample,
+#' ms1_scan)` aggregation typically pulled from `attr(stats, "grouped_signal")`.
+#'
 #' @keywords internal
 #' @noRd
-.pseudo_spec_plots <- function(grouped_signal, correlations, pseudo_spec, feature_id) {
+.pseudo_spec_plots <- function(grouped_signal, stats, pseudo_spec, feature_id) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) return(list())
-  q95 <- if (nrow(correlations)) stats::quantile(correlations$int, 0.95, na.rm = TRUE) else 0
+  if (nrow(pseudo_spec) == 0) return(list())
 
-  p_corr <- ggplot2::ggplot(correlations,
+  # Color contrast reference: high-int in the pre-filter distribution, so the
+  # scale doesn't collapse when survivors happen to be uniformly bright.
+  ref_int <- if (nrow(stats)) stats$int else pseudo_spec$int
+  q95 <- stats::quantile(ref_int, 0.95, na.rm = TRUE)
+
+  p_corr <- ggplot2::ggplot(pseudo_spec,
                             ggplot2::aes(x = correlation, y = fdr,
                                          color = int > q95)) +
     ggplot2::geom_point(alpha = 0.6) +
-    ggplot2::labs(title = paste0(feature_id, ": correlation vs FDR"),
+    ggplot2::labs(title = paste0(feature_id, ": correlation vs FDR (surviving groups)"),
                   color = "high int") +
     ggplot2::theme_minimal(base_size = 9)
 
@@ -219,9 +194,10 @@ select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05
                   x = "fragment m/z", y = "intensity") +
     ggplot2::theme_minimal(base_size = 9)
 
-  filtered <- grouped_signal[group %in% pseudo_spec$group]
+  filtered <- if (is.null(grouped_signal) || !nrow(grouped_signal)) NULL
+              else grouped_signal[group %in% pseudo_spec$group]
 
-  p_ms1 <- if (nrow(filtered)) {
+  p_ms1 <- if (!is.null(filtered) && nrow(filtered)) {
     ms1_summary <- filtered[, .(ms1_int = mean(ms1_int)), by = .(sample, ms1_scan)]
     ggplot2::ggplot(ms1_summary, ggplot2::aes(x = ms1_scan, y = ms1_int)) +
       ggplot2::geom_line() +
@@ -230,7 +206,7 @@ select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05
       ggplot2::theme_minimal(base_size = 8)
   } else NULL
 
-  p_eic <- if (nrow(filtered)) {
+  p_eic <- if (!is.null(filtered) && nrow(filtered)) {
     eic <- data.table::copy(filtered)[, int := scale(int)[, 1], by = .(sample, group)]
     ggplot2::ggplot(eic, ggplot2::aes(x = ms1_scan, y = int,
                                       color = factor(group))) +
@@ -246,9 +222,9 @@ select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05
 
 #' Clean pseudo-spectra for many features (main batch entry)
 #'
-#' Orchestrates: connect → fetch → per-feature [process_pseudo_spec()] →
-#' [select_pseudo_spec()] → optional plot/MGF. Returns a `data.table` in
-#' the schema downstream `03_make_mgf.R` expects.
+#' Orchestrates: connect → fetch → per-feature [process_pseudo_spec()]
+#' (grouper + `group_statistics_fn`) → `filter_fn` → optional plot / MGF.
+#' Returns a `data.table` in the schema downstream `03_make_mgf.R` expects.
 #'
 #' @param targets Character vector of feature ids.
 #' @param file_directory Path to pool/pointer parquets.
@@ -256,17 +232,24 @@ select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05
 #'   `mzmed` and `rtmed` per target.
 #' @param con Optional pre-opened connection (else opened + closed internally).
 #' @param buffer,fdr_thresh,cor_thresh,min_count Tunables passed downstream.
-#'   `fdr_thresh` / `cor_thresh` are only consulted by the default
-#'   `filter_fn`; a custom `filter_fn` may ignore them.
-#' @param grouper Grouping of centroids, e.g., [ppm_upgma()]. 
-#'    The function shotake n vectors of length x and return a single vector of length 
-#'    x with the number of unique values < x.  
-#' 
-#' @param filter_fn Function taking a `correlations` `data.table` and
-#'   returning the surviving rows. `NULL` (default) uses
-#'   [select_pseudo_spec()] bound to `cor_thresh` / `fdr_thresh`.
-#'   Provide your own to swap in a different significance/selection
-#'   scheme (research-swappable — same role as `grouper`).
+#'   `min_count` is consumed by the default `group_statistics_fn`;
+#'   `cor_thresh` / `fdr_thresh` are consumed by the default `filter_fn`.
+#'   A custom `group_statistics_fn` / `filter_fn` may ignore them.
+#' @param grouper A grouper closure - see [grouper-contract]. Called
+#'   twice inside [process_pseudo_spec()] (first on raw fragment m/z,
+#'   then on per-group means to re-merge neighbours split by
+#'   scan-to-scan m/z jitter).
+#' @param group_statistics_fn A statistics closure conforming to
+#'   [stats-contract] — receives the raw per-feature dt (with `group`
+#'   column) and returns the per-group summary (no thresholding).
+#'   `NULL` (default) uses [correlation_statistics()] with `min_count`.
+#'   Swap in [apex_correlation_statistics()] to add apex-shift columns.
+#' @param filter_fn A filter closure conforming to [filter-contract] —
+#'   receives the per-group stats table and returns a row-subset.
+#'   `NULL` (default) uses [correlation_filtering()] with
+#'   `cor_thresh`/`fdr_thresh`. Swap in [apex_correlation_filtering()]
+#'   for apex-aware thresholding (pair with
+#'   [apex_correlation_statistics()]).
 #' @param batch_idx,n_batches Optional slice: process only batch
 #'   `batch_idx` of `n_batches` equal contiguous chunks of `targets`.
 #'   `batch_idx = NULL` (default) processes every target in-process.
@@ -280,21 +263,22 @@ select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05
 clean_pseudo_spectra <- function(
   targets,
   file_directory,
-  fd               = NULL,
-  con              = NULL,
-  grouper          = ppm_upgma(ppm = 30),
-  buffer           = 50L,
-  fdr_thresh       = 0.01,
-  cor_thresh       = 0.3,
-  min_count        = 10L,
-  filter_fn        = NULL,
-  batch_idx        = NULL,
-  n_batches        = 1L,
-  report           = TRUE,
-  report_path      = "pseudo_specs_report.pdf",
-  mgf_dir          = NULL,
-  fetch_chunk_size = 200L,
-  progress         = TRUE
+  fd                  = NULL,
+  con                 = NULL,
+  grouper             = ppm_upgma(ppm = 30),
+  buffer              = 50L,
+  fdr_thresh          = 0.01,
+  cor_thresh          = 0.3,
+  min_count           = 10L,
+  group_statistics_fn = NULL,
+  filter_fn           = NULL,
+  batch_idx           = NULL,
+  n_batches           = 1L,
+  report              = TRUE,
+  report_path         = "pseudo_specs_report.pdf",
+  mgf_dir             = NULL,
+  fetch_chunk_size    = 200L,
+  progress            = TRUE
 ) {
   if (!is.null(batch_idx)) {
     per_batch <- ceiling(length(targets) / n_batches)
@@ -304,9 +288,11 @@ clean_pseudo_spectra <- function(
     targets <- targets[my_start:my_end]
   }
 
+  if (is.null(group_statistics_fn))
+    group_statistics_fn <- correlation_statistics(min_count = min_count)
   if (is.null(filter_fn))
-    filter_fn <- function(correlations)
-      select_pseudo_spec(correlations, cor_thresh, fdr_thresh)
+    filter_fn <- correlation_filtering(cor_thresh = cor_thresh,
+                                       fdr_thresh = fdr_thresh)
   own_con <- is.null(con)
   if (own_con) {
     con <- setup_connection(file_directory)
@@ -363,22 +349,22 @@ clean_pseudo_spectra <- function(
       rt_target <- if (has_fd && target %in% rownames(fd_df)) fd_df[target, "rtmed"]
                    else NA_real_
 
-      out <- tryCatch(
+      stats <- tryCatch(
         process_pseudo_spec(dt, mz_target = mz_target,
-                            grouper = grouper, buffer = buffer,
-                            min_count = min_count),
+                            grouper = grouper,
+                            group_statistics_fn = group_statistics_fn,
+                            buffer = buffer),
         error = function(e) NULL
       )
-      if (is.null(out) || nrow(out$correlations) == 0) return(NULL)
+      if (is.null(stats) || nrow(stats) == 0) return(NULL)
 
-      pseudo_spec <- filter_fn(out$correlations)
-
-      if (nrow(pseudo_spec) == 0) return(NULL)
+      pseudo_spec <- filter_fn(stats)
+      if (is.null(pseudo_spec) || nrow(pseudo_spec) == 0) return(NULL)
 
       if (report) {
+        gs <- attr(stats, "grouped_signal")
         plots <- Filter(Negate(is.null),
-                        .pseudo_spec_plots(out$grouped_signal, out$correlations,
-                                           pseudo_spec, target))
+                        .pseudo_spec_plots(gs, stats, pseudo_spec, target))
         if (length(plots)) {
           if (requireNamespace("cowplot", quietly = TRUE)) {
             print(cowplot::plot_grid(plotlist = plots, ncol = 2))
@@ -395,14 +381,6 @@ clean_pseudo_spectra <- function(
           rt = rt_target
         )
       }
-
-      n_samples_per_group <- out$grouped_signal[
-        group %in% pseudo_spec$group,
-        .(n_samples = data.table::uniqueN(sample)),
-        by = group
-      ]
-      pseudo_spec <- merge(pseudo_spec, n_samples_per_group,
-                           by = "group", all.x = TRUE)
 
       data.table::data.table(
         mz_g2           = pseudo_spec$fragment_mz,

@@ -32,6 +32,9 @@ utils::globalVariables(c(
   # dplyr/tidyr NSE
   "feature_id", "name", "value", "dataOrigin", "rtmin", "rtmax", "rt", "into",
    # spectral_filtering
-  "apex", "group", "fragment_mz", "ms1_int", "ms1_scan", "ms2_scan",
-  "fdr", "p_value", "correlation", "count", "n_samples"
+  "apex", "group", "group_first", "intensity", "i.group",
+  "fragment_mz", "ms1_int", "ms1_scan", "ms2_scan",
+  "fdr", "p_value", "correlation", "count", "n_samples",
+   # filtering
+  "apex_shift", "apex_shift_med", "apex_shift_iqr", "m1", "m2"
 ))

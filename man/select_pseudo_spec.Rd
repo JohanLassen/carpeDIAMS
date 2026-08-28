@@ -2,12 +2,13 @@
 % Please edit documentation in R/spectral_filtering.R
 \name{select_pseudo_spec}
 \alias{select_pseudo_spec}
-\title{Filter per-group correlations by correlation + FDR thresholds}
+\title{Legacy per-group thresholder (superseded by [correlation_filtering()])}
 \usage{
 select_pseudo_spec(correlations, cor_thresh = 0.5, fdr_thresh = 0.05)
 }
 \arguments{
-\item{correlations}{`data.table` from `process_pseudo_spec()$correlations`.}
+\item{correlations}{Per-group summary from a [stats-contract] closure
+(typically [correlation_statistics()]).}
 
 \item{cor_thresh}{Numeric. Minimum correlation to keep.}
 
@@ -17,9 +18,9 @@ select_pseudo_spec(correlations, cor_thresh = 0.5, fdr_thresh = 0.05)
 A `data.table` (possibly empty).
 }
 \description{
-Keeps rows whose Pearson correlation is at least `cor_thresh` and
-whose Benjamini-Hochberg FDR is at most `fdr_thresh`. Default filter
-used by [clean_pseudo_spectra()]; swap in your own via that
-function's `filter_fn` argument.
+Kept as an internal convenience for old scripts. New code should use
+`correlation_filtering(cor_thresh, fdr_thresh)` — a [filter-contract]
+closure that composes with [process_pseudo_spec()] via
+[clean_pseudo_spectra()]'s `filter_fn` argument.
 }
 \keyword{internal}

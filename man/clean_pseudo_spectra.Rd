@@ -14,7 +14,10 @@ clean_pseudo_spectra(
   fdr_thresh = 0.01,
   cor_thresh = 0.3,
   min_count = 10L,
+  group_statistics_fn = NULL,
   filter_fn = NULL,
+  batch_idx = NULL,
+  n_batches = 1L,
   report = TRUE,
   report_path = "pseudo_specs_report.pdf",
   mgf_dir = NULL,
@@ -32,19 +35,33 @@ clean_pseudo_spectra(
 
 \item{con}{Optional pre-opened connection (else opened + closed internally).}
 
-\item{grouper}{Grouping of centroids, e.g., [ppm_upgma()]. 
-The function shotake n vectors of length x and return a single vector of length 
-x with the number of unique values < x.}
+\item{grouper}{A grouper closure - see [grouper-contract]. Called
+twice inside [process_pseudo_spec()] (first on raw fragment m/z,
+then on per-group means to re-merge neighbours split by
+scan-to-scan m/z jitter).}
 
 \item{buffer, fdr_thresh, cor_thresh, min_count}{Tunables passed downstream.
-`fdr_thresh` / `cor_thresh` are only consulted by the default
-`filter_fn`; a custom `filter_fn` may ignore them.}
+`min_count` is consumed by the default `group_statistics_fn`;
+`cor_thresh` / `fdr_thresh` are consumed by the default `filter_fn`.
+A custom `group_statistics_fn` / `filter_fn` may ignore them.}
 
-\item{filter_fn}{Function taking a `correlations` `data.table` and
-returning the surviving rows. `NULL` (default) uses
-[select_pseudo_spec()] bound to `cor_thresh` / `fdr_thresh`.
-Provide your own to swap in a different significance/selection
-scheme (research-swappable — same role as `grouper`).}
+\item{group_statistics_fn}{A statistics closure conforming to
+[stats-contract] — receives the raw per-feature dt (with `group`
+column) and returns the per-group summary (no thresholding).
+`NULL` (default) uses [correlation_statistics()] with `min_count`.
+Swap in [apex_correlation_statistics()] to add apex-shift columns.}
+
+\item{filter_fn}{A filter closure conforming to [filter-contract] —
+receives the per-group stats table and returns a row-subset.
+`NULL` (default) uses [correlation_filtering()] with
+`cor_thresh`/`fdr_thresh`. Swap in [apex_correlation_filtering()]
+for apex-aware thresholding (pair with
+[apex_correlation_statistics()]).}
+
+\item{batch_idx, n_batches}{Optional slice: process only batch
+`batch_idx` of `n_batches` equal contiguous chunks of `targets`.
+`batch_idx = NULL` (default) processes every target in-process.
+Set both for the DAG-batched `stage = "filter"` path.}
 
 \item{report, report_path}{PDF diagnostic report on/off + path.}
 
@@ -58,7 +75,7 @@ scheme (research-swappable — same role as `grouper`).}
 A `data.table` matching the legacy 02_filter_features schema.
 }
 \description{
-Orchestrates: connect → fetch → per-feature [process_pseudo_spec()] →
-[select_pseudo_spec()] → optional plot/MGF. Returns a `data.table` in
-the schema downstream `03_make_mgf.R` expects.
+Orchestrates: connect → fetch → per-feature [process_pseudo_spec()]
+(grouper + `group_statistics_fn`) → `filter_fn` → optional plot / MGF.
+Returns a `data.table` in the schema downstream `03_make_mgf.R` expects.
 }

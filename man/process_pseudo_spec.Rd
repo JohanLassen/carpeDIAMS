@@ -2,14 +2,14 @@
 % Please edit documentation in R/spectral_filtering.R
 \name{process_pseudo_spec}
 \alias{process_pseudo_spec}
-\title{Build a feature's pseudo-spectrum from its raw MS1+MS2 data.table}
+\title{Build a feature's per-group statistics table from raw MS1+MS2 data.table}
 \usage{
 process_pseudo_spec(
   dt,
   mz_target,
   grouper = ppm_upgma(ppm = 30),
-  buffer = 50L,
-  min_count = 10L
+  group_statistics_fn = correlation_statistics(),
+  buffer = 50L
 )
 }
 \arguments{
@@ -17,15 +17,29 @@ process_pseudo_spec(
 
 \item{mz_target}{Numeric. Precursor m/z (drives the ppm tolerance).}
 
-\item{buffer}{Integer. Scan window around apex per sample.}
+\item{grouper}{A grouper closure - see [grouper-contract].}
 
-\item{min_count}{Integer. Minimum scan-count per group.}
+\item{group_statistics_fn}{A statistics closure - see [stats-contract].}
+
+\item{buffer}{Integer. Scan window around each sample's MS1 apex.}
 }
 \value{
-list(grouped_signal, correlations), or `NULL`.
+A per-group summary `data.table` (see [stats-contract]) with
+  one row per group, plus a `grouped_signal` attribute
+  (aggregated `(group, sample, ms1_scan)`) used by the diagnostic report.
 }
 \description{
-Per-sample apex window → two-pass ppm-UPGMA grouping → per-group
-Pearson correlation of summed MS2 vs MS1 + BH FDR.
+Per-sample apex window (buffer) → first grouper pass on raw
+`fragment_mz` → aggregation to per-first-pass-group mean m/z → second
+grouper pass (merges neighbours that scan-to-scan m/z jitter would
+otherwise split) → statistics closure returns the full per-group
+summary. No thresholding — see [clean_pseudo_spectra()] for the
+composition with a [filter-contract] closure.
+}
+\details{
+The `(group, sample, ms1_scan)` aggregation computed inside the
+statistics closure is attached to the return value as attribute
+`"grouped_signal"` so downstream code (diagnostic plots) can reuse it
+without a second groupby.
 }
 \keyword{internal}
