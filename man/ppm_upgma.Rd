@@ -22,5 +22,5 @@ g <- ppm_upgma(ppm = 30)
 g(c(100.0, 100.001, 200.0), target_mz = 100)
 }
 \seealso{
-[abs_upgma()], [iaac_grouper()], [validate_grouper()]
+[abs_upgma()], [iaac_grouper()], [pelt_grouper()], [validate_grouper()]
 }

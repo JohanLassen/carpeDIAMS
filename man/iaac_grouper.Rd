@@ -26,5 +26,5 @@ g <- iaac_grouper(k = 1, p0 = 8, Isat = 1e5)
 g(c(100.0, 100.001, 200.0), intensity = c(1000, 800, 200))
 }
 \seealso{
-[ppm_upgma()], [abs_upgma()], [validate_grouper()]
+[ppm_upgma()], [abs_upgma()], [pelt_grouper()], [validate_grouper()]
 }

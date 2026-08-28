@@ -30,7 +30,7 @@ NULL
 #'
 #' @param ppm Numeric. Tolerance in parts per million.
 #' @return A grouper closure - see [grouper-contract].
-#' @seealso [abs_upgma()], [iaac_grouper()], [validate_grouper()]
+#' @seealso [abs_upgma()], [iaac_grouper()], [pelt_grouper()], [validate_grouper()]
 #' @export
 #' @examples
 #' g <- ppm_upgma(ppm = 30)
@@ -54,7 +54,7 @@ ppm_upgma <- function(ppm = 30) {
 #' @param p0 Numeric. Initial parameter for clustering.
 #' @param Isat Numeric. Saturation intensity.
 #' @return A grouper closure - see [grouper-contract].
-#' @seealso [ppm_upgma()], [abs_upgma()], [validate_grouper()]
+#' @seealso [ppm_upgma()], [abs_upgma()], [pelt_grouper()], [validate_grouper()]
 #' @export
 #' @examples
 #' g <- iaac_grouper(k = 1, p0 = 8, Isat = 1e5)
@@ -65,6 +65,44 @@ iaac_grouper <- function(k = 1, p0 = 8, Isat = 1e5) {
     if (is.null(intensity)) stop("iaac_grouper requires `intensity`.")
     fast_1D_iaac_grouping_cpp(mz, intensity = intensity,
                               k = k, p0 = p0, Isat = Isat)
+  }
+}
+
+
+#' PELT (penalized optimal partitioning) grouper
+#'
+#' Returns a grouper closure that calls the package's C++ 1-D PELT
+#' implementation. Unlike the greedy UPGMA / IAAC variants, PELT
+#' globally minimises the total per-segment shot-noise cost plus a
+#' `beta`-weighted segment count — the exact optimum over 1-D
+#' partitions. Uses `mz` and `intensity`; ignores `target_mz`, `scan`,
+#' `ms1_int`.
+#'
+#' Cost model matches [iaac_grouper()]: per-point sigma
+#' `mz_i * p0 * max(1, sqrt(Isat / I_i)) / 1e6` (Da). Larger `beta`
+#' means fewer, wider groups; `beta <= 0` selects the BIC-style default
+#' `2 * log(n)`. `max_seg > 0` caps the largest allowed group size and
+#' bounds the worst case at `O(n * max_seg)` while preserving optimality
+#' among partitions obeying the cap.
+#'
+#' @param beta Numeric. Penalty per additional segment; `<= 0` picks
+#'   `2 * log(n)`.
+#' @param p0 Numeric. Floor mass accuracy in ppm.
+#' @param Isat Numeric. Intensity at which per-point precision plateaus at `p0`.
+#' @param max_seg Integer. Maximum group size; `0` = unlimited.
+#' @return A grouper closure - see [grouper-contract].
+#' @seealso [iaac_grouper()], [ppm_upgma()], [abs_upgma()], [validate_grouper()]
+#' @export
+#' @examples
+#' g <- pelt_grouper(beta = -1, p0 = 5, Isat = 5e4)
+#' g(c(100.000, 100.001, 100.500), intensity = c(1000, 800, 200))
+pelt_grouper <- function(beta = -1.0, p0 = 5.0, Isat = 5e4, max_seg = 0L) {
+  force(beta); force(p0); force(Isat); force(max_seg)
+  function(mz, intensity = NULL, target_mz = NULL, scan = NULL, ms1_int = NULL) {
+    if (is.null(intensity)) stop("pelt_grouper requires `intensity`.")
+    fast_1D_pelt_grouping_cpp(mz, intensity = intensity,
+                              beta = beta, p0 = p0, Isat = Isat,
+                              max_seg = as.integer(max_seg))
   }
 }
 

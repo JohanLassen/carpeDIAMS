@@ -37,10 +37,27 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fast_1D_pelt_grouping_cpp
+IntegerVector fast_1D_pelt_grouping_cpp(NumericVector mz, NumericVector intensity, double beta, double p0, double Isat, int max_seg);
+RcppExport SEXP _carpeDIAMS_fast_1D_pelt_grouping_cpp(SEXP mzSEXP, SEXP intensitySEXP, SEXP betaSEXP, SEXP p0SEXP, SEXP IsatSEXP, SEXP max_segSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type mz(mzSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type intensity(intensitySEXP);
+    Rcpp::traits::input_parameter< double >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< double >::type p0(p0SEXP);
+    Rcpp::traits::input_parameter< double >::type Isat(IsatSEXP);
+    Rcpp::traits::input_parameter< int >::type max_seg(max_segSEXP);
+    rcpp_result_gen = Rcpp::wrap(fast_1D_pelt_grouping_cpp(mz, intensity, beta, p0, Isat, max_seg));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_carpeDIAMS_fast_1D_upgma_grouping_cpp", (DL_FUNC) &_carpeDIAMS_fast_1D_upgma_grouping_cpp, 2},
     {"_carpeDIAMS_fast_1D_iaac_grouping_cpp", (DL_FUNC) &_carpeDIAMS_fast_1D_iaac_grouping_cpp, 5},
+    {"_carpeDIAMS_fast_1D_pelt_grouping_cpp", (DL_FUNC) &_carpeDIAMS_fast_1D_pelt_grouping_cpp, 6},
     {NULL, NULL, 0}
 };
 

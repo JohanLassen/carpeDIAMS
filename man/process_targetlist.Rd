@@ -9,7 +9,7 @@ process_targetlist(
   output = NULL,
   targetlist = NULL,
   tmp_dir = NULL,
-  stage = c("all", "prepare", "sample", "finalize"),
+  stage = c("all", "prepare", "sample", "filter", "finalize"),
   sample_idx = NULL,
   sample_file = NULL,
   ppm = 20,
@@ -18,6 +18,8 @@ process_targetlist(
   fdr_thresh = 0.1,
   cor_thresh = 0.1,
   min_count = 10L,
+  batch_idx = NULL,
+  n_batches = 1L,
   ion_mode = "POSITIVE",
   ...
 )
@@ -34,7 +36,9 @@ vector of mzML paths.}
 \item{tmp_dir}{Working directory. `NULL` only for `stage = "all"`
 (creates + cleans a `tempfile`); required otherwise.}
 
-\item{stage}{One of `"all"`, `"prepare"`, `"sample"`, `"finalize"`.}
+\item{stage}{One of `"all"`, `"prepare"`, `"sample"`, `"filter"`,
+`"finalize"`. `"filter"` is the batched scale-out path;
+`"finalize"` auto-aggregates batch parquets if present.}
 
 \item{sample_idx, sample_file}{Sample addressing for
 `stage = "sample"`; idx is 1-based into `manifest`.}
@@ -49,6 +53,10 @@ target's `rt` when extracting scans.}
 
 \item{fdr_thresh, cor_thresh, min_count}{Passed to
 [clean_pseudo_spectra()] (permissive defaults).}
+
+\item{batch_idx, n_batches}{For `stage = "filter"`: split `targets`
+into `n_batches` contiguous chunks and process chunk `batch_idx`
+(1-based). One `filter` DAG job per batch; `finalize` unions them.}
 
 \item{ion_mode}{`"POSITIVE"` or `"NEGATIVE"`.}
 

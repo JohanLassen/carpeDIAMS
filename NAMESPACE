@@ -11,9 +11,11 @@ export(export_mgf)
 export(export_pseudospectra)
 export(extractScanInfo)
 export(fast_1D_iaac_grouping_cpp)
+export(fast_1D_pelt_grouping_cpp)
 export(fast_1D_upgma_grouping_cpp)
 export(getBackendPeaks)
 export(iaac_grouper)
+export(pelt_grouper)
 export(ppm_upgma)
 export(process_mzml)
 export(process_pseudo_spec)
@@ -39,12 +41,10 @@ import(tibble)
 import(tidyr)
 import(xcms)
 importFrom(Rcpp,sourceCpp)
-importFrom(data.table,
-  ":=",
-  .I,
-  .SD,
-  data.table,
-  setDT,
-  setkey
-)
+importFrom(data.table,":=")
+importFrom(data.table,.I)
+importFrom(data.table,.SD)
+importFrom(data.table,data.table)
+importFrom(data.table,setDT)
+importFrom(data.table,setkey)
 useDynLib(carpeDIAMS, .registration = TRUE)

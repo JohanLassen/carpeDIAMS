@@ -8,7 +8,7 @@ process_xcms(
   input,
   output = NULL,
   tmp_dir = NULL,
-  stage = c("all", "prepare", "sample", "finalize"),
+  stage = c("all", "prepare", "sample", "filter", "finalize"),
   sample_idx = NULL,
   sample_file = NULL,
   subsample = FALSE,
@@ -21,6 +21,8 @@ process_xcms(
   fdr_thresh = 0.1,
   cor_thresh = 0.1,
   min_count = 10L,
+  batch_idx = NULL,
+  n_batches = 1L,
   ion_mode = "POSITIVE",
   ...
 )
@@ -37,7 +39,9 @@ only allowed for `stage = "all"` (creates + cleans a `tempfile`).
 Required otherwise.}
 
 \item{stage}{One of `"all"` (default, interactive), `"prepare"`,
-`"sample"`, `"finalize"`.}
+`"sample"`, `"filter"`, `"finalize"`. `"filter"` is the batched
+scale-out path (see `batch_idx`); `"finalize"` auto-aggregates any
+batch parquets if present, else runs everything in-process.}
 
 \item{sample_idx}{Integer index into `manifest$sample_idx` for
 `stage = "sample"`. Takes precedence over `sample_file`.}
@@ -67,6 +71,10 @@ window (peak-alignment slack).}
 (permissive) rather than [clean_pseudo_spectra()]'s stricter
 built-in defaults.}
 
+\item{batch_idx, n_batches}{For `stage = "filter"`: split `targets`
+into `n_batches` contiguous chunks and process chunk `batch_idx`
+(1-based). One `filter` DAG job per batch; `finalize` unions them.}
+
 \item{ion_mode}{`"POSITIVE"` or `"NEGATIVE"`; written to MGF headers.}
 
 \item{...}{Forwarded to [clean_pseudo_spectra()] (e.g. `buffer`).}
@@ -94,6 +102,9 @@ declare dependencies on these paths without asking R what was written:
   \item `<tmp_dir>/sample_<idx>_pool.parquet`,
         `<tmp_dir>/sample_<idx>_pointers.parquet` — one pair per
     sample (written by [Ms2PseudoRaw()] via [build_parquets_xcms()]).
+  \item `<tmp_dir>/features_batch_<i>.parquet` — one per `filter`
+    batch (present only when the batched path is used; `finalize`
+    auto-detects and aggregates them).
 }
 
 Split-stage runs must share the same `tmp_dir`.

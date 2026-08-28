@@ -11,14 +11,30 @@ fast_1D_upgma_grouping_cpp <- function(x, maxDiff) {
 }
 
 #' Fast 1D intensity-adaptive grouping (IAAC), O(n log n)
-#' @param mz numeric vector of m/z values
-#' @param intensity numeric vector (same length as mz)
+#' @param mz numeric vector of m/z values (finite, > 0)
+#' @param intensity numeric vector (same length as mz; values < 1 are clamped to 1)
 #' @param k z-threshold; a group is kept iff every internal merge is <= k sigma
+#'   (k < 0 yields all singletons; +Inf yields one group; NA is an error)
 #' @param p0 floor mass accuracy in ppm (high-intensity limit / systematic floor)
 #' @param Isat intensity at which the per-point precision plateaus at p0
 #' @return integer vector of group ids (length(mz)), 1-indexed by min original position
 #' @export
 fast_1D_iaac_grouping_cpp <- function(mz, intensity, k, p0 = 5.0, Isat = 5e4) {
     .Call(`_carpeDIAMS_fast_1D_iaac_grouping_cpp`, mz, intensity, k, p0, Isat)
+}
+
+#' Exact 1D grouping via PELT (penalized optimal partitioning)
+#' @param mz numeric vector of m/z values (finite, > 0)
+#' @param intensity numeric vector (same length as mz; values < 1 are clamped to 1)
+#' @param beta penalty per additional segment; beta <= 0 -> auto (2 * log(n))
+#' @param p0 floor mass accuracy in ppm (high-intensity limit / systematic floor)
+#' @param Isat intensity at which the per-point precision plateaus at p0
+#' @param max_seg maximum number of centroids allowed in one group; <= 0 = unlimited.
+#'   Caps PELT's worst case (one giant group) at O(n * max_seg) instead of O(n^2).
+#'   The result stays the exact global optimum over partitions obeying the cap.
+#' @return integer vector of group ids (length(mz)), 1-indexed by min original position
+#' @export
+fast_1D_pelt_grouping_cpp <- function(mz, intensity, beta = -1.0, p0 = 5.0, Isat = 5e4, max_seg = 0L) {
+    .Call(`_carpeDIAMS_fast_1D_pelt_grouping_cpp`, mz, intensity, beta, p0, Isat, max_seg)
 }
 
