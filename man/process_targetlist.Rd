@@ -15,6 +15,8 @@ process_targetlist(
   ppm = 20,
   rt_width = 15,
   grouper = NULL,
+  group_statistics_fn = NULL,
+  filter_fn = NULL,
   fdr_thresh = 0.1,
   cor_thresh = 0.1,
   min_count = 10L,
@@ -48,11 +50,18 @@ vector of mzML paths.}
 \item{rt_width}{Total width (seconds) of the RT window around each
 target's `rt` when extracting scans.}
 
-\item{grouper}{Fragment-grouping function; `NULL` uses
-`ppm_upgma(ppm = ppm)`.}
+\item{grouper}{A grouper closure (see [grouper-contract]); `NULL`
+uses `ppm_upgma(ppm = ppm)`.}
 
-\item{fdr_thresh, cor_thresh, min_count}{Passed to
-[clean_pseudo_spectra()] (permissive defaults).}
+\item{group_statistics_fn}{A statistics closure (see [stats-contract]);
+`NULL` uses `correlation_statistics(min_count = min_count)`.}
+
+\item{filter_fn}{A filter closure (see [filter-contract]); `NULL`
+uses `correlation_filtering(cor_thresh, fdr_thresh)`.}
+
+\item{fdr_thresh, cor_thresh, min_count}{Consumed by the default
+`filter_fn` / `group_statistics_fn`; ignored when the caller
+supplies its own. Permissive defaults.}
 
 \item{batch_idx, n_batches}{For `stage = "filter"`: split `targets`
 into `n_batches` contiguous chunks and process chunk `batch_idx`

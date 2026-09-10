@@ -4,9 +4,9 @@
 #include <queue>
 #include <stack>
 #include <cmath>
-
 using namespace Rcpp;
 
+namespace {
 struct Node {
   int start, end;     
   int left_child = -1;
@@ -32,6 +32,7 @@ struct Point {
   double val;
   int original_idx;
 };
+} // anonymous namespace
 
 //' Fast 1D UPGMA grouping
 //' @param x numeric vector of m/z values

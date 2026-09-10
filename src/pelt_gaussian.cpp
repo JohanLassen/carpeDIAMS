@@ -26,6 +26,7 @@ using namespace Rcpp;
 // anyway. The per-step work is O(|candidates|) either way, so this costs
 // nothing asymptotically.
 
+namespace {
 struct PeltPoint { double mz, w; int original_idx; };   // w = 1 / sigma^2
 
 struct PeltCand {
@@ -35,6 +36,7 @@ struct PeltCand {
   double xref;       // first m/z of the segment
   double lastCost;   // cost of segment [tau, t) at the current t
 };
+} // anonymous namespace 
 
 //' Exact 1D grouping via PELT (penalized optimal partitioning)
 //' @param mz numeric vector of m/z values (finite, > 0)

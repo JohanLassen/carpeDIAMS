@@ -9,7 +9,8 @@ process_pseudo_spec(
   mz_target,
   grouper = ppm_upgma(ppm = 30),
   group_statistics_fn = correlation_statistics(),
-  buffer = 50L
+  buffer = 50L,
+  consensus_mz_fn = NULL
 )
 }
 \arguments{
@@ -17,11 +18,17 @@ process_pseudo_spec(
 
 \item{mz_target}{Numeric. Precursor m/z (drives the ppm tolerance).}
 
-\item{grouper}{A grouper closure - see [grouper-contract].}
+\item{grouper}{A grouper closure - see [grouper-contract]. Used for
+both passes.}
 
 \item{group_statistics_fn}{A statistics closure - see [stats-contract].}
 
 \item{buffer}{Integer. Scan window around each sample's MS1 apex.}
+
+\item{consensus_mz_fn}{A consensus-mz closure - see
+[consensus-mz-contract]. `NULL` (default) uses
+[consensus_mz_weighted()] (`frac = 0.5, Isat = 1e4`) - the package's
+long-standing default behavior.}
 }
 \value{
 A per-group summary `data.table` (see [stats-contract]) with
@@ -29,14 +36,37 @@ A per-group summary `data.table` (see [stats-contract]) with
   (aggregated `(group, sample, ms1_scan)`) used by the diagnostic report.
 }
 \description{
-Per-sample apex window (buffer) → first grouper pass on raw
-`fragment_mz` → aggregation to per-first-pass-group mean m/z → second
-grouper pass (merges neighbours that scan-to-scan m/z jitter would
-otherwise split) → statistics closure returns the full per-group
-summary. No thresholding — see [clean_pseudo_spectra()] for the
-composition with a [filter-contract] closure.
+Stages, in order:
 }
 \details{
+\enumerate{
+  \item per-sample apex window (`buffer`);
+  \item pass 1 (within sample): `grouper` clusters raw `fragment_mz`
+    scoped to each sample separately, so this pass only ever sees
+    within-sample scan-to-scan jitter, never between-sample
+    calibration drift;
+  \item collapse each `(sample, pass-1 group)` to one evidence-weighted
+    point - intensity-weighted consensus m/z (via [.consensus_mz()])
+    and *summed* intensity, so a sample with more corroborating scans
+    contributes proportionally more evidence, not more competing
+    points;
+  \item pass 2 (across samples): `grouper` clusters those per-sample
+    points, resolving between-sample calibration drift - a separate,
+    larger-scale effect pass 1 never attempts to address. The result
+    is joined back onto every original raw row; `int`/`ms1_int` on
+    `dt` are never touched by either pass, so MS1/MS2 correspondence
+    stays at full `(sample, ms1_scan)` resolution throughout;
+  \item consensus m/z — one value per final group, written to
+    `group_mz` by [.consensus_mz()]. From here on m/z is a constant
+    label;
+  \item statistics closure, which reduces each group to one row and
+    never touches m/z again — it just carries `group_mz` through as
+    `fragment_mz`.
+}
+
+No thresholding — see [clean_pseudo_spectra()] for the composition with a
+[filter-contract] closure.
+
 The `(group, sample, ms1_scan)` aggregation computed inside the
 statistics closure is attached to the return value as attribute
 `"grouped_signal"` so downstream code (diagnostic plots) can reuse it

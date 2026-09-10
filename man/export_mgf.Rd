@@ -8,10 +8,17 @@ export_mgf(results, fd, mgf_path, ion_mode = "POSITIVE")
 }
 \arguments{
 \item{results}{data.table from clean_pseudo_spectra: one row per fragment,
-with columns feature_id, mz (fragment m/z), total_intensity.}
+with columns feature_id, mz (fragment m/z), total_intensity, and
+(optionally) deconv_error. Despite the name, `total_intensity` is a
+*mean*, not a sum — the mean across `(sample, ms1_scan)` cells of each
+cell's summed fragment intensity. It is therefore a representative
+peak height rather than total accumulated signal, so it does not grow
+with sample or scan count. The name is fixed by the downstream
+`modules/annotation` contract; `deconv_error` is additive.}
 
 \item{fd}{featureDefinitions (or data.frame) giving precursor m/z + RT per
-feature. Rownames or a feature_id column must match results$feature_id.}
+feature — every row gets exactly one MGF block. Rownames or a
+feature_id column must match results$feature_id.}
 
 \item{mgf_path}{output .mgf path.}
 
@@ -21,5 +28,12 @@ feature. Rownames or a feature_id column must match results$feature_id.}
 invisibly mgf_path.
 }
 \description{
-Assemble a combined MGF from a flat pseudo-spectra results table
+Writes exactly one MGF block per row of `fd`. A feature with real
+fragment rows in `results` (no `deconv_error`, or the column absent)
+gets a normal peak-list block; anything else — missing from `results`
+entirely, or present only as a [clean_pseudo_spectra()] sentinel row
+(`deconv_error` set) — gets an empty `DeconvERROR:<reason>` placeholder
+block instead. No feature is ever silently omitted: this is what lets
+a downstream workflow rely on the MGF covering `fd` exactly, one entry
+per row, regardless of upstream data quality.
 }

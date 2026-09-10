@@ -16,6 +16,8 @@ clean_pseudo_spectra(
   min_count = 10L,
   group_statistics_fn = NULL,
   filter_fn = NULL,
+  consensus_mz_fn = NULL,
+  require_rt = FALSE,
   batch_idx = NULL,
   n_batches = 1L,
   report = TRUE,
@@ -31,14 +33,15 @@ clean_pseudo_spectra(
 \item{file_directory}{Path to pool/pointer parquets.}
 
 \item{fd}{Optional `featureDefinitions()`-shaped frame; supplies
-`mzmed` and `rtmed` per target.}
+`mzmed` and `rtmed` per target. A target missing from `fd`, or whose
+`mzmed` (or, when `require_rt = TRUE`, `rtmed`) is `NA`, is reported
+as a `"MissingTargetInfo"` sentinel row rather than processed.}
 
 \item{con}{Optional pre-opened connection (else opened + closed internally).}
 
-\item{grouper}{A grouper closure - see [grouper-contract]. Called
-twice inside [process_pseudo_spec()] (first on raw fragment m/z,
-then on per-group means to re-merge neighbours split by
-scan-to-scan m/z jitter).}
+\item{grouper}{A grouper closure - see [grouper-contract]. Used for
+both of [process_pseudo_spec()]'s passes (within-sample, then
+across-sample).}
 
 \item{buffer, fdr_thresh, cor_thresh, min_count}{Tunables passed downstream.
 `min_count` is consumed by the default `group_statistics_fn`;
@@ -58,6 +61,17 @@ receives the per-group stats table and returns a row-subset.
 for apex-aware thresholding (pair with
 [apex_correlation_statistics()]).}
 
+\item{consensus_mz_fn}{A consensus-mz closure - see
+[consensus-mz-contract]. `NULL` (default) uses
+[consensus_mz_weighted()] - the package's long-standing default.}
+
+\item{require_rt}{Logical. When `TRUE`, a target whose `fd$rtmed` is
+`NA` is also reported as `"MissingTargetInfo"` (not just `mzmed`).
+Set by routes where RT drives scan extraction upstream (the
+target-list route); `FALSE` (default) for routes where RT is purely
+informational (the xcms route, where per-sample scan windows come
+from `chromPeaks`, not this feature-level summary).}
+
 \item{batch_idx, n_batches}{Optional slice: process only batch
 `batch_idx` of `n_batches` equal contiguous chunks of `targets`.
 `batch_idx = NULL` (default) processes every target in-process.
@@ -72,10 +86,32 @@ Set both for the DAG-batched `stage = "filter"` path.}
 \item{progress}{Print a per-feature progress counter.}
 }
 \value{
-A `data.table` matching the legacy 02_filter_features schema.
+A `data.table` matching the legacy 02_filter_features schema:
+  `mz_g2, grouped_mz, mz, total_intensity, n_samples, count, r, t_stat,
+  p_value, fdr, feature_id`, plus `deconv_error` (`NA` on real rows).
+  `mz_g2` and `mz` both carry the per-group consensus m/z.
+  `total_intensity` is a *mean* despite the name — the mean across
+  `(sample, ms1_scan)` cells of each cell's summed fragment intensity,
+  i.e. a representative peak height that does not scale with sample or
+  scan count. Column names are fixed by the downstream
+  `modules/annotation` contract; `deconv_error` is additive — consumers
+  reading these rows directly (bypassing [export_mgf()]) should filter
+  `is.na(deconv_error)` to get only real fragment rows.
 }
 \description{
 Orchestrates: connect → fetch → per-feature [process_pseudo_spec()]
 (grouper + `group_statistics_fn`) → `filter_fn` → optional plot / MGF.
 Returns a `data.table` in the schema downstream `03_make_mgf.R` expects.
+}
+\details{
+Guarantees exactly one outcome per element of `targets`: either real
+fragment rows, or a single [.deconv_error_row()] sentinel (`deconv_error`
+set to a reason code — `"MissingTargetInfo"`, `"MissingMs1Signal"`, or
+`"NoAssociatedFragments"`). No target is ever silently dropped from the
+return value; nothing here aborts on bad input, including a target
+directory with no pointer parquets at all. This is what lets
+[export_mgf()] guarantee one MGF block per `fd` row regardless of data
+quality — the property [process_xcms()]/[process_targetlist()] batching
+depends on, since each batch must independently account for its own
+slice of targets.
 }

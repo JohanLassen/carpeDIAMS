@@ -15,8 +15,29 @@ drop-in replaceable in [clean_pseudo_spectra()] and
 
 Only `mz` is required. Each grouper uses the subset of arguments it
 needs and ignores the rest; callers pass whatever is available at
-each grouping site (some columns are dropped by aggregation between
-the two grouping passes in `process_pseudo_spec()`).
+each grouping site. [process_pseudo_spec()] always calls the same
+grouper twice, unconditionally, for two different problems:
+
+\itemize{
+  \item **Pass 1 (within sample)** — every argument populated,
+    scoped `by = sample`. Resolves within-sample scan-to-scan
+    m/z jitter.
+  \item **Pass 2 (across samples)** — only `mz` and `intensity` are
+    populated (`scan`/`ms1_int` are `NULL`, `intensity` is a
+    per-sample sum), over one collapsed, evidence-weighted point per
+    `(sample, pass-1 group)`. Resolves between-sample calibration
+    drift — a different, larger-scale effect pass 1 never attempts to
+    address, since it is scoped to one sample at a time.
+}
+
+Because pass 2 solves a problem pass 1 structurally never saw, rather
+than re-litigating pass 1's own decision on a lossy summary of the
+*same* population, any grouper is safe to use in either slot — there
+is no data-independent-tolerance restriction here. One nuance for the
+model-based groupers ([iaac_grouper()], [pelt_grouper()]): their
+pass-2 result is optimal *for the deliberately-coarsened per-sample
+representation pass 2 is given*, not a claim that it recovers some
+ground truth finer-grained input would have found.
 
 A grouper must return an integer vector of the same length as `mz`
 with no more unique values than `unique(mz)`; use [validate_grouper()]

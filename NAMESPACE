@@ -9,6 +9,7 @@ export(bin_grouper)
 export(build_parquets_xcms)
 export(carpediams)
 export(clean_pseudo_spectra)
+export(consensus_mz_weighted)
 export(correlation_filtering)
 export(correlation_statistics)
 export(export_mgf)
@@ -44,10 +45,12 @@ import(tibble)
 import(tidyr)
 import(xcms)
 importFrom(Rcpp,sourceCpp)
-importFrom(data.table,":=")
-importFrom(data.table,.I)
-importFrom(data.table,.SD)
-importFrom(data.table,data.table)
-importFrom(data.table,setDT)
-importFrom(data.table,setkey)
+importFrom(data.table,
+  ":=",
+  .I,
+  .SD,
+  data.table,
+  setDT,
+  setkey
+)
 useDynLib(carpeDIAMS, .registration = TRUE)

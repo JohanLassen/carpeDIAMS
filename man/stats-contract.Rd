@@ -15,11 +15,15 @@ are drop-in replaceable in [process_pseudo_spec()] and
 
 `dt` is the raw per-feature data.table produced by
 [batch_get_feature_data()] (columns `sample, feature, mz, fragment_mz,
-int, ms1_scan, ms2_scan, ms1_int`) after the active grouper has added a
-`group` column and the apex window has been applied.
+int, ms1_scan, ms2_scan, ms1_int`) after the apex window has been
+applied, the active grouper has added a `group` column, and
+[process_pseudo_spec()] has added `group_mz` — the consensus m/z, one
+constant value per group.
 
-A statistics closure aggregates and returns **one row per group** with
-the canonical schema
+A statistics closure must **carry `group_mz` through as `fragment_mz`**
+rather than deriving m/z itself; m/z is settled before statistics run.
+It aggregates and returns **one row per group** with the canonical
+schema
 
 \preformatted{
   group, fragment_mz, mz, int, ms1_int,

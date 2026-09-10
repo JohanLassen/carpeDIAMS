@@ -4,7 +4,15 @@
 \alias{process_mzml}
 \title{Process a single mzML file into a pseudo-spectra MGF}
 \usage{
-process_mzml(path, tmp_dir, output = NULL, rt_range = c(30, 1200))
+process_mzml(
+  path,
+  tmp_dir,
+  output = NULL,
+  rt_range = c(30, 1200),
+  grouper = NULL,
+  group_statistics_fn = NULL,
+  filter_fn = NULL
+)
 }
 \arguments{
 \item{path}{mzML file path.}
@@ -15,6 +23,15 @@ process_mzml(path, tmp_dir, output = NULL, rt_range = c(30, 1200))
 `file.path(tmp_dir, "all_features.mgf")` for backward compatibility.}
 
 \item{rt_range}{retention-time window (seconds) to retain.}
+
+\item{grouper}{A grouper closure (see [grouper-contract]); `NULL`
+uses `ppm_upgma(ppm = 30)`.}
+
+\item{group_statistics_fn}{A statistics closure (see [stats-contract]);
+`NULL` uses `correlation_statistics()`.}
+
+\item{filter_fn}{A filter closure (see [filter-contract]); `NULL`
+uses `correlation_filtering(cor_thresh = 0.1, fdr_thresh = 0.1)`.}
 }
 \value{
 cleaned pseudo-spectra data.table (invisibly written to MGF too).

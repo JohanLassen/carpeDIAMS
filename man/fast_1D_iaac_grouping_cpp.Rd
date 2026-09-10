@@ -7,11 +7,12 @@
 fast_1D_iaac_grouping_cpp(mz, intensity, k, p0 = 5, Isat = 50000)
 }
 \arguments{
-\item{mz}{numeric vector of m/z values}
+\item{mz}{numeric vector of m/z values (finite, > 0)}
 
-\item{intensity}{numeric vector (same length as mz)}
+\item{intensity}{numeric vector (same length as mz; values < 1 are clamped to 1)}
 
-\item{k}{z-threshold; a group is kept iff every internal merge is <= k sigma}
+\item{k}{z-threshold; a group is kept iff every internal merge is <= k sigma
+(k < 0 yields all singletons; +Inf yields one group; NA is an error)}
 
 \item{p0}{floor mass accuracy in ppm (high-intensity limit / systematic floor)}
 

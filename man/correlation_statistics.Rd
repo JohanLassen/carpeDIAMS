@@ -22,6 +22,10 @@ BH-adjusted FDR. No thresholding is applied — see
 [correlation_filtering()] for the paired filter.
 }
 \details{
+The reported `fragment_mz` is the per-group consensus m/z computed
+upstream by [process_pseudo_spec()]; this closure carries it through
+and does not recompute it.
+
 Conforms to [stats-contract].
 }
 \seealso{

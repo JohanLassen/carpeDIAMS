@@ -1,3 +1,27 @@
+#' One DeconvERROR placeholder block (no file I/O)
+#'
+#' `BEGIN IONS ... END IONS` with no peaks, titled
+#' `<feature_id> DeconvERROR:<error_code>`. Used by [export_mgf()] so that
+#' a feature with no real spectrum still gets exactly one MGF entry,
+#' carrying the reason in its title rather than being silently absent.
+#'
+#' @keywords internal
+#' @noRd
+.deconv_error_block <- function(fid, mz_target, rt_target, error_code, ion_mode) {
+  c(
+    "BEGIN IONS",
+    sprintf("TITLE=%s DeconvERROR:%s", fid, error_code),
+    if (!is.na(mz_target)) sprintf("PEPMASS=%.4f", mz_target) else NULL,
+    if (!is.na(rt_target)) sprintf("RTINSECONDS=%.2f", rt_target) else NULL,
+    "CHARGE=1+",
+    "MSLEVEL=2",
+    sprintf("IONMODE=%s", ion_mode),
+    "END IONS",
+    ""
+  )
+}
+
+
 #' Write a single-feature MGF block (concat-friendly)
 #'
 #' Each file is a complete `BEGIN IONS ... END IONS` — merge with
@@ -119,37 +143,62 @@ export_pseudospectra <- function(spectra_list,
 
 #' Assemble a combined MGF from a flat pseudo-spectra results table
 #'
+#' Writes exactly one MGF block per row of `fd`. A feature with real
+#' fragment rows in `results` (no `deconv_error`, or the column absent)
+#' gets a normal peak-list block; anything else — missing from `results`
+#' entirely, or present only as a [clean_pseudo_spectra()] sentinel row
+#' (`deconv_error` set) — gets an empty `DeconvERROR:<reason>` placeholder
+#' block instead. No feature is ever silently omitted: this is what lets
+#' a downstream workflow rely on the MGF covering `fd` exactly, one entry
+#' per row, regardless of upstream data quality.
+#'
 #' @param results data.table from clean_pseudo_spectra: one row per fragment,
-#'   with columns feature_id, mz (fragment m/z), total_intensity.
+#'   with columns feature_id, mz (fragment m/z), total_intensity, and
+#'   (optionally) deconv_error. Despite the name, `total_intensity` is a
+#'   *mean*, not a sum — the mean across `(sample, ms1_scan)` cells of each
+#'   cell's summed fragment intensity. It is therefore a representative
+#'   peak height rather than total accumulated signal, so it does not grow
+#'   with sample or scan count. The name is fixed by the downstream
+#'   `modules/annotation` contract; `deconv_error` is additive.
 #' @param fd featureDefinitions (or data.frame) giving precursor m/z + RT per
-#'   feature. Rownames or a feature_id column must match results$feature_id.
+#'   feature — every row gets exactly one MGF block. Rownames or a
+#'   feature_id column must match results$feature_id.
 #' @param mgf_path output .mgf path.
 #' @param ion_mode "POSITIVE" or "NEGATIVE".
 #' @return invisibly mgf_path.
 #' @export
 export_mgf <- function(results, fd, mgf_path, ion_mode = "POSITIVE") {
-  if (is.null(results) || nrow(results) == 0) {
-    warning("No spectra to export."); return(invisible(NULL))
-  }
-
   # --- precursor m/z + RT lookup from fd ---
   fd_df <- as.data.frame(fd)
   if ("feature_id" %in% colnames(fd_df)) rownames(fd_df) <- fd_df$feature_id
   if (!"mzmed" %in% colnames(fd_df) && "mz" %in% colnames(fd_df)) fd_df$mzmed <- fd_df$mz
   if (!"rtmed" %in% colnames(fd_df) && "rt" %in% colnames(fd_df)) fd_df$rtmed <- fd_df$rt
 
-  feats <- unique(results$feature_id)
+  results_dt <- if (is.null(results)) data.table::data.table() else data.table::as.data.table(results)
+  has_feature_col <- "feature_id" %in% colnames(results_dt)
+  has_error_col   <- "deconv_error" %in% colnames(results_dt)
+
+  dir.create(dirname(mgf_path), showWarnings = FALSE, recursive = TRUE)
   con <- file(mgf_path, open = "w")
   on.exit(close(con), add = TRUE)
 
-  for (fid in feats) {
-    block <- results[feature_id == fid]
+  n_real <- 0L
+  for (fid in rownames(fd_df)) {
+    mz_target <- fd_df[fid, "mzmed"]
+    rt_target <- fd_df[fid, "rtmed"]
+
+    block <- if (has_feature_col) results_dt[feature_id == fid] else results_dt[0]
+    is_placeholder <- nrow(block) == 0 ||
+      (has_error_col && !is.na(block$deconv_error[1]))
+
+    if (is_placeholder) {
+      reason <- if (nrow(block) && has_error_col) block$deconv_error[1] else "NoAssociatedFragments"
+      writeLines(.deconv_error_block(fid, mz_target, rt_target, reason, ion_mode), con)
+      next
+    }
+
+    n_real <- n_real + 1L
     block <- block[order(mz)]                       # fragments ascending m/z
-
-    has_fd    <- fid %in% rownames(fd_df)
-    mz_target <- if (has_fd) fd_df[fid, "mzmed"] else NA_real_
-    rt_target <- if (has_fd) fd_df[fid, "rtmed"] else NA_real_
-
     peaks <- sprintf("%.4f %.0f", block$mz, block$total_intensity)
 
     header <- c(
@@ -163,5 +212,8 @@ export_mgf <- function(results, fd, mgf_path, ion_mode = "POSITIVE") {
     )
     writeLines(c(header, peaks, "END IONS", ""), con)
   }
+
+  if (n_real == 0L)
+    warning("No spectra to export - every feature was written as a DeconvERROR placeholder; see MGF titles for reasons.")
   invisible(mgf_path)
 }

@@ -10,11 +10,15 @@
 #'
 #' `dt` is the raw per-feature data.table produced by
 #' [batch_get_feature_data()] (columns `sample, feature, mz, fragment_mz,
-#' int, ms1_scan, ms2_scan, ms1_int`) after the active grouper has added a
-#' `group` column and the apex window has been applied.
+#' int, ms1_scan, ms2_scan, ms1_int`) after the apex window has been
+#' applied, the active grouper has added a `group` column, and
+#' [process_pseudo_spec()] has added `group_mz` — the consensus m/z, one
+#' constant value per group.
 #'
-#' A statistics closure aggregates and returns **one row per group** with
-#' the canonical schema
+#' A statistics closure must **carry `group_mz` through as `fragment_mz`**
+#' rather than deriving m/z itself; m/z is settled before statistics run.
+#' It aggregates and returns **one row per group** with the canonical
+#' schema
 #'
 #' \preformatted{
 #'   group, fragment_mz, mz, int, ms1_int,
@@ -68,14 +72,26 @@ NULL
 #' `"grouped_signal"` so downstream code (extra-statistic add-ons,
 #' diagnostic plots) can reuse it without recomputing.
 #'
+#' m/z is not computed here. [process_pseudo_spec()] has already written
+#' one consensus value per group into `group_mz`, and this function only
+#' carries it through as `fragment_mz`. `dt` arriving without that column
+#' (a direct notebook call on [get_raw_spec()] output) gets it filled in
+#' first, so the estimate is the same either way. The `fragment_mz` inside
+#' `grouped_signal` is a plain per-scan-cell mean kept for diagnostics —
+#' nothing reads it for the estimate.
+#'
 #' @keywords internal
 #' @noRd
 .correlations_from_dt <- function(dt, min_count) {
+  if (!"group_mz" %in% names(dt))
+    dt[, group_mz := .consensus_mz(fragment_mz, int), by = group]
+
   grouped_signal <- dt[, .(
     int         = sum(int),
     ms1_int     = mean(ms1_int),
     fragment_mz = mean(fragment_mz),
-    mz          = mean(mz)
+    mz          = mean(mz),
+    group_mz    = group_mz[1]
   ), by = .(group, sample, ms1_scan)]
 
   group_counts <- grouped_signal[, .(count = .N), by = group][count > min_count]
@@ -108,7 +124,7 @@ NULL
   }, by = group]
 
   group_summary <- grouped_signal[group %in% group_counts$group, .(
-    fragment_mz = mean(fragment_mz),
+    fragment_mz = group_mz[1],
     mz          = mean(mz),
     int         = mean(int),
     ms1_int     = mean(ms1_int),
@@ -149,6 +165,10 @@ NULL
 #' summed MS2 intensity and MS1 intensity, its p-value, and the
 #' BH-adjusted FDR. No thresholding is applied — see
 #' [correlation_filtering()] for the paired filter.
+#'
+#' The reported `fragment_mz` is the per-group consensus m/z computed
+#' upstream by [process_pseudo_spec()]; this closure carries it through
+#' and does not recompute it.
 #'
 #' Conforms to [stats-contract].
 #'

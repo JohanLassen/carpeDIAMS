@@ -30,8 +30,10 @@ Suggests:
     cowplot,
     knitr,
     rmarkdown,
-    qs
+    qs,
+    testthat (>= 3.0.0)
 VignetteBuilder: knitr
 LinkingTo: Rcpp
 SystemRequirements: Python (>= 3.8), apricot-select, numpy
 Config/roxygen2/version: 8.1.0
+Config/testthat/edition: 3
