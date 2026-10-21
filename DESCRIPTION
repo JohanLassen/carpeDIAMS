@@ -40,6 +40,7 @@ Suggests:
 Config/Needs/website: pkgdown
 VignetteBuilder: knitr
 LinkingTo: Rcpp
+biocViews:
 SystemRequirements: Python (>= 3.8), apricot-select, numpy
 Config/roxygen2/version: 8.1.0
 Roxygen: list(markdown = TRUE)
