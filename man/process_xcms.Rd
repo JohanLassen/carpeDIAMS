@@ -2,7 +2,7 @@
 % Please edit documentation in R/api.R
 \name{process_xcms}
 \alias{process_xcms}
-\title{Build pseudo-spectra MGF from a grouped XcmsExperiment}
+\title{Build a pseudo-spectra MGF from a grouped xcms object}
 \usage{
 process_xcms(
   input,
@@ -30,92 +30,95 @@ process_xcms(
 )
 }
 \arguments{
-\item{input}{An `XcmsExperiment`/`XCMSnExp`, or a path to one saved
-as `.rds` / `.qs` / `.rda`. Must have gone through
-`xcms::groupChromPeaks()`.}
+\item{input}{An \code{XcmsExperiment}/\code{XCMSnExp} (after
+\code{xcms::groupChromPeaks()}), or a \code{.rds} / \code{.qs} / \code{.rda} path to
+one. Only read by \code{prepare}.}
 
-\item{output}{MGF path. Required for `stage = "all"` or `"finalize"`.}
+\item{output}{MGF path. Required for \code{"all"} and \code{"finalize"}.}
 
-\item{tmp_dir}{Working directory for the on-disk contract. `NULL`
-only allowed for `stage = "all"` (creates + cleans a `tempfile`).
-Required otherwise.}
+\item{tmp_dir}{Working directory. \code{NULL} is only allowed for
+\code{stage = "all"}, which then uses a \code{tempfile()} deleted on exit.}
 
-\item{stage}{One of `"all"` (default, interactive), `"prepare"`,
-`"sample"`, `"filter"`, `"finalize"`. `"filter"` is the batched
-scale-out path (see `batch_idx`); `"finalize"` auto-aggregates any
-batch parquets if present, else runs everything in-process.}
+\item{stage}{One of \code{"all"}, \code{"prepare"}, \code{"sample"}, \code{"filter"},
+\code{"finalize"}.}
 
-\item{sample_idx}{Integer index into `manifest$sample_idx` for
-`stage = "sample"`. Takes precedence over `sample_file`.}
+\item{sample_idx}{Row of \code{manifest.csv} to process at \code{"sample"}.
+Takes precedence over \code{sample_file}.}
 
-\item{sample_file}{Basename of an mzML for `stage = "sample"`;
-resolved to an idx via the manifest.}
+\item{sample_file}{mzML basename to process at \code{"sample"}; looked up
+in \code{manifest.csv}.}
 
-\item{subsample}{Logical. When `TRUE`, apricot picks `subset_size`
-representative samples; `FALSE` (default) uses every sample.}
+\item{subsample}{If \code{TRUE}, keep \code{subset_size} samples chosen by
+apricot \code{MaxCoverageSelection} (needs Python with \code{apricot-select}
+and \code{numpy}). See \code{\link[=subset_samples_xcms]{subset_samples_xcms()}}.}
 
-\item{subset_size, q_prob}{Passed to [subset_samples_xcms()] when
-`subsample = TRUE`.}
+\item{subset_size, q_prob}{Passed to \code{\link[=subset_samples_xcms]{subset_samples_xcms()}}.}
 
-\item{top_n}{Integer. Top-N samples per feature to build parquets
-for (passed to [build_parquets_xcms()]).}
+\item{top_n}{Number of most intense samples per feature to extract.
+Used by \code{prepare} only.}
 
-\item{ppm}{Fragment/precursor tolerance in ppm.}
+\item{ppm}{Used twice: at \code{sample}, the MS1 m/z tolerance for the
+precursor trace (converted to Da at the sample's largest feature
+m/z); and for the default grouper \code{ppm_upgma(ppm = ppm)}.}
 
-\item{rt_buffer}{Seconds added to each side of every peak's RT
-window (peak-alignment slack).}
+\item{rt_buffer}{Seconds added to both sides of each peak's
+\code{rtmin}/\code{rtmax} at \code{sample}.}
 
-\item{grouper}{A grouper closure (see [grouper-contract]); `NULL`
-uses `ppm_upgma(ppm = ppm)`.}
+\item{grouper}{A grouper closure (see \link{grouper-contract}); \code{NULL}
+uses \code{ppm_upgma(ppm = ppm)}.}
 
-\item{group_statistics_fn}{A statistics closure (see [stats-contract]);
-`NULL` uses `correlation_statistics(min_count = min_count)`.}
+\item{group_statistics_fn}{A statistics closure (see \link{stats-contract});
+\code{NULL} uses \code{correlation_statistics(min_count = min_count)}.}
 
-\item{filter_fn}{A filter closure (see [filter-contract]); `NULL`
-uses `correlation_filtering(cor_thresh, fdr_thresh)`.}
+\item{filter_fn}{A filter closure (see \link{filter-contract}); \code{NULL}
+uses \code{correlation_filtering(cor_thresh, fdr_thresh)}.}
 
-\item{fdr_thresh, cor_thresh, min_count}{Consumed by the default
-`filter_fn` / `group_statistics_fn`; ignored when the caller
-supplies its own. Defaults mirror [process_mzml()] (permissive).}
+\item{fdr_thresh, cor_thresh, min_count}{Only used to build the default
+\code{filter_fn} / \code{group_statistics_fn}.}
 
-\item{batch_idx, n_batches}{For `stage = "filter"`: split `targets`
-into `n_batches` contiguous chunks and process chunk `batch_idx`
-(1-based). One `filter` DAG job per batch; `finalize` unions them.}
+\item{batch_idx, n_batches}{For \code{"filter"}: process slice \code{batch_idx}
+(1-based) of \code{n_batches}. A slice past the last feature writes an
+empty parquet.}
 
-\item{ion_mode}{`"POSITIVE"` or `"NEGATIVE"`; written to MGF headers.}
+\item{ion_mode}{\code{"POSITIVE"} or \code{"NEGATIVE"}, written as \verb{IONMODE=}.}
 
-\item{...}{Forwarded to [clean_pseudo_spectra()] (e.g. `buffer`).}
+\item{...}{Forwarded to \code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}} at \code{"filter"} and
+\code{"finalize"} (e.g. \code{buffer}, \code{consensus_mz_fn}, \code{apex_source},
+\code{window_mode}).}
 }
 \value{
-Invisibly the `tmp_dir` path (useful for chaining stages).
+Invisibly \code{tmp_dir}.
 }
 \description{
-One user-facing entry point for the xcms → MGF pipeline. Runs
-end-to-end for interactive use (`stage = "all"`), or as a single
-stage (`prepare` / `sample` / `finalize`) so that a DAG can
-parallelize per-sample work.
+Multi-sample route. Every feature in \code{featureDefinitions()} gets one
+MGF block, built from its top-\code{top_n} most intense samples. Run it in
+one call (\code{stage = "all"}) or one stage at a time so a scheduler can
+parallelize the per-sample and per-batch work.
 }
-\details{
-# On-disk contract
-
-All stages share a `tmp_dir` with a fixed layout — the DAG can
-declare dependencies on these paths without asking R what was written:
-
-\itemize{
-  \item `<tmp_dir>/manifest.csv` — `sample_idx,filename` (written by
-    `prepare`; used by `sample` to resolve `sample_file`).
-  \item `<tmp_dir>/mssubset.rds` — the [subset_samples_xcms()] output.
-  \item `<tmp_dir>/fd.rds` — the `featureDefinitions()` frame.
-  \item `<tmp_dir>/sample_<idx>_pool.parquet`,
-        `<tmp_dir>/sample_<idx>_pointers.parquet` — one pair per
-    sample (written by [Ms2PseudoRaw()] via [build_parquets_xcms()]).
-  \item `<tmp_dir>/features_batch_<i>.parquet` — one per `filter`
-    batch (present only when the batched path is used; `finalize`
-    auto-detects and aggregates them).
+\section{Stages}{
+\describe{
+\item{\code{prepare}}{Loads \code{input}, builds the feature × sample
+intensity matrix (\code{featureValues(method = "medret", value = "into")}), optionally subsamples with apricot, and ranks the
+top-\code{top_n} samples per feature (ties can add more). Writes
+\code{manifest.csv}, \code{mssubset.rds}, \code{fd.rds}, \code{sample_topfeatures.rds}.}
+\item{\code{sample}}{For one sample: extracts the MS1/MS2 scans inside
+each qualifying feature's chromatographic peak (± \code{rt_buffer})
+and writes \verb{sample_<idx>_pool.parquet} (MS2) and
+\verb{sample_<idx>_pointers.parquet} (MS1 trace per feature).}
+\item{\code{filter}}{For one contiguous slice (\code{batch_idx} of
+\code{n_batches}) of the features: groups, scores and filters
+fragments with \code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}} and writes
+\verb{features_batch_<batch_idx>.parquet}.}
+\item{\code{finalize}}{If any \code{features_batch_*.parquet} exist in
+\code{tmp_dir}, binds \strong{all} of them; otherwise runs the filtering for
+every feature in-process. Then writes the MGF with \code{\link[=export_mgf]{export_mgf()}}.}
+\item{\code{all}}{\code{prepare}, every \code{sample}, then \code{finalize} (in-process
+filtering, no batches).}
 }
 
-Split-stage runs must share the same `tmp_dir`.
+All stages of one run must share \code{tmp_dir}.
 }
+
 \seealso{
 Other api:
 \code{\link[=carpediams]{carpediams()}},

@@ -8,36 +8,30 @@
 #'   function(dt) -> per-group summary data.table
 #' }
 #'
-#' `dt` is the raw per-feature data.table produced by
-#' [batch_get_feature_data()] (columns `sample, feature, mz, fragment_mz,
-#' int, ms1_scan, ms2_scan, ms1_int`) after the apex window has been
-#' applied, the active grouper has added a `group` column, and
-#' [process_pseudo_spec()] has added `group_mz` — the consensus m/z, one
-#' constant value per group.
+#' `dt` holds one feature's rows from [batch_get_feature_data()] (one row
+#' per MS1 scan × following MS2 centroid), after [process_pseudo_spec()]
+#' has dropped rows without a fragment, applied the apex window, and
+#' added `group` (from the grouper) and `group_mz` (the consensus m/z,
+#' constant within a group).
 #'
-#' A statistics closure must **carry `group_mz` through as `fragment_mz`**
-#' rather than deriving m/z itself; m/z is settled before statistics run.
-#' It aggregates and returns **one row per group** with the canonical
-#' schema
+#' The closure returns one row per group with at least
 #'
 #' \preformatted{
 #'   group, fragment_mz, mz, int, ms1_int,
 #'   correlation, p_value, fdr, count, n_samples
 #' }
 #'
-#' plus any extra per-group columns it needs (e.g. `apex_shift_med`,
-#' `apex_shift_iqr` from [apex_correlation_statistics()]). No thresholding
-#' is applied — that is the job of a [filter-contract] closure downstream.
+#' where `fragment_mz` is `group_mz` carried through. Extra columns are
+#' allowed (e.g. `apex_shift_med`, `apex_shift_iqr`). It should not
+#' threshold; that is the [filter-contract] closure's job.
+#' [clean_pseudo_spectra()] reads `fragment_mz`, `group`, `int`,
+#' `n_samples`, `count`, `correlation`, `p_value` and `fdr` from the
+#' filtered result.
 #'
-#' It should attach the per-`(group, sample, ms1_scan)` aggregation as an
-#' attribute named `"grouped_signal"` so [process_pseudo_spec()] and the
-#' diagnostic plots can reuse it without recomputing.
-#'
-#' Return an empty data.table (same columns) when nothing survives
-#' `min_count`.
+#' Optionally attach the `(group, sample, ms1_scan)` aggregate as
+#' attribute `"grouped_signal"`; the diagnostic report plots it.
 #'
 #' @name stats-contract
-#' @keywords internal
 NULL
 
 
@@ -50,14 +44,12 @@ NULL
 #'   function(stats) -> row-subset of stats
 #' }
 #'
-#' `stats` is the per-group summary produced by a [stats-contract] closure.
-#' A filter returns a row-subset of that summary (same columns) — no
-#' aggregation, no new statistics.
-#'
-#' Return an empty data.table (same columns) when nothing survives.
+#' `stats` is the per-group table from a [stats-contract] closure. The
+#' filter returns the rows to keep, with the same columns. Zero rows (or
+#' `NULL`) means the feature gets a `DeconvERROR:NoAssociatedFragments`
+#' block in the MGF.
 #'
 #' @name filter-contract
-#' @keywords internal
 NULL
 
 
@@ -75,7 +67,7 @@ NULL
 #' m/z is not computed here. [process_pseudo_spec()] has already written
 #' one consensus value per group into `group_mz`, and this function only
 #' carries it through as `fragment_mz`. `dt` arriving without that column
-#' (a direct notebook call on [get_raw_spec()] output) gets it filled in
+#' (a direct notebook call on `get_raw_spec()` output) gets it filled in
 #' first, so the estimate is the same either way. The `fragment_mz` inside
 #' `grouped_signal` is a plain per-scan-cell mean kept for diagnostics —
 #' nothing reads it for the estimate.
@@ -159,21 +151,20 @@ NULL
 
 #' Per-group correlation statistics (the package default)
 #'
-#' Returns a statistics closure that aggregates `dt` to
-#' `(group, sample, ms1_scan)`, drops groups with fewer than `min_count`
-#' observations, and computes per-group Pearson correlation between
-#' summed MS2 intensity and MS1 intensity, its p-value, and the
-#' BH-adjusted FDR. No thresholding is applied — see
-#' [correlation_filtering()] for the paired filter.
+#' For each fragment group:
 #'
-#' The reported `fragment_mz` is the per-group consensus m/z computed
-#' upstream by [process_pseudo_spec()]; this closure carries it through
-#' and does not recompute it.
+#' 1. Sum fragment intensity per `(sample, ms1_scan)` cell.
+#' 2. Drop the group unless it has **more than** `min_count` cells.
+#' 3. Pearson correlation between the cell sums and the MS1 intensity,
+#'    across all cells of all samples, with a two-sided t-test p-value.
+#' 4. Benjamini–Hochberg FDR across the groups of this feature.
 #'
-#' Conforms to [stats-contract].
+#' Output columns: `int` is the mean cell sum, `count` the number of
+#' cells, `n_samples` the number of samples. Conforms to
+#' [stats-contract]; pair with [correlation_filtering()].
 #'
-#' @param min_count Minimum `(sample, ms1_scan)` observation count per
-#'   group before Pearson r is computed.
+#' @param min_count Groups need more than this many `(sample, ms1_scan)`
+#'   cells to be scored.
 #' @return A statistics closure — see [stats-contract].
 #' @seealso [apex_correlation_statistics()], [correlation_filtering()]
 #' @export
@@ -188,23 +179,18 @@ correlation_statistics <- function(min_count = 10L) {
 
 #' Per-group correlation + apex-agreement statistics
 #'
-#' As [correlation_statistics()], plus two extra per-group columns
-#' summarising the intra-sample MS1 <-> MS2 apex-centroid shift across
-#' samples:
+#' As [correlation_statistics()], plus two columns that compare where
+#' the fragment and the precursor elute. Per sample, `m1` is the
+#' MS1-intensity-weighted mean scan of the precursor trace, `m2` the
+#' fragment-intensity-weighted mean scan of the group, and the shift is
+#' `m2 - m1` (in scans):
 #'
-#' \itemize{
-#'   \item `apex_shift_med` — median across samples of the intensity-weighted
-#'     `(m2 - m1)` scan-index centroid difference.
-#'   \item `apex_shift_iqr` — IQR of the same across samples.
-#' }
+#' * `apex_shift_med`: median shift across samples.
+#' * `apex_shift_iqr`: IQR of the shift across samples.
 #'
-#' MS1 centroids are computed on the deduplicated per-`(sample, ms1_scan)`
-#' MS1 intensity trace so each scan is weighted once by `ms1_int`, not
-#' `ms1_int x N_fragments_at_that_scan` (the earlier all-rows form biased
-#' the centroid toward groups whose fragments cluster at the apex).
-#'
-#' Conforms to [stats-contract]. Pair with [apex_correlation_filtering()],
-#' which additionally thresholds on the two apex-shift columns.
+#' A real fragment co-elutes with its precursor, so its shift is near 0
+#' in every sample. Conforms to [stats-contract]; pair with
+#' [apex_correlation_filtering()].
 #'
 #' @inheritParams correlation_statistics
 #' @return A statistics closure — see [stats-contract].
@@ -243,12 +229,12 @@ apex_correlation_statistics <- function(min_count = 10L) {
 
 #' Correlation + BH FDR filter (the package default)
 #'
-#' Returns a filter closure that keeps rows whose Pearson correlation is
-#' at least `cor_thresh` and whose BH-adjusted FDR is at most
-#' `fdr_thresh`. Operates on the per-group summary produced by a
-#' [stats-contract] closure (typically [correlation_statistics()]).
+#' Keeps groups with `correlation >= cor_thresh` and `fdr <= fdr_thresh`.
+#' Groups with `NA` correlation are dropped. Conforms to
+#' [filter-contract].
 #'
-#' Conforms to [filter-contract].
+#' The factory defaults (0.3, 0.01) differ from the defaults the
+#' `process_*()` functions build when `filter_fn = NULL` (0.1, 0.1).
 #'
 #' @param cor_thresh Minimum Pearson correlation to keep.
 #' @param fdr_thresh Maximum BH-adjusted FDR to keep.
@@ -266,19 +252,15 @@ correlation_filtering <- function(cor_thresh = 0.3, fdr_thresh = 0.01) {
 
 #' Correlation + FDR + apex-agreement filter
 #'
-#' As [correlation_filtering()], additionally requiring
+#' As [correlation_filtering()], and also requires
 #' `abs(apex_shift_med) <= max_apex_shift_med` and
-#' `apex_shift_iqr <= max_apex_shift_iqr`. Requires the two apex-shift
-#' columns on its input — pair with [apex_correlation_statistics()]
-#' upstream; a helpful error is raised if those columns are missing.
-#'
+#' `apex_shift_iqr <= max_apex_shift_iqr`. Errors if those columns are
+#' missing, i.e. if [apex_correlation_statistics()] was not used.
 #' Conforms to [filter-contract].
 #'
 #' @inheritParams correlation_filtering
-#' @param max_apex_shift_med Reject if `abs(median(apex_shift))` across
-#'   samples exceeds this (in scans).
-#' @param max_apex_shift_iqr Reject if `IQR(apex_shift)` across samples
-#'   exceeds this (in scans).
+#' @param max_apex_shift_med Maximum `abs(apex_shift_med)`, in scans.
+#' @param max_apex_shift_iqr Maximum `apex_shift_iqr`, in scans.
 #' @return A filter closure — see [filter-contract].
 #' @seealso [correlation_filtering()], [apex_correlation_statistics()]
 #' @export

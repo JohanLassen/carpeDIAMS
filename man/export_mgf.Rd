@@ -7,33 +7,25 @@
 export_mgf(results, fd, mgf_path, ion_mode = "POSITIVE")
 }
 \arguments{
-\item{results}{data.table from clean_pseudo_spectra: one row per fragment,
-with columns feature_id, mz (fragment m/z), total_intensity, and
-(optionally) deconv_error. Despite the name, `total_intensity` is a
-*mean*, not a sum — the mean across `(sample, ms1_scan)` cells of each
-cell's summed fragment intensity. It is therefore a representative
-peak height rather than total accumulated signal, so it does not grow
-with sample or scan count. The name is fixed by the downstream
-`modules/annotation` contract; `deconv_error` is additive.}
+\item{results}{Output of \code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}}: \code{feature_id}, \code{mz},
+\code{total_intensity}, optional \code{deconv_error}.}
 
-\item{fd}{featureDefinitions (or data.frame) giving precursor m/z + RT per
-feature — every row gets exactly one MGF block. Rownames or a
-feature_id column must match results$feature_id.}
+\item{fd}{Feature table with \code{mzmed}/\code{rtmed} (or \code{mz}/\code{rt}); rownames or
+a \code{feature_id} column give the ids.}
 
-\item{mgf_path}{output .mgf path.}
+\item{mgf_path}{Output path (directories are created).}
 
-\item{ion_mode}{"POSITIVE" or "NEGATIVE".}
+\item{ion_mode}{Written as \verb{IONMODE=}.}
 }
 \value{
-invisibly mgf_path.
+Invisibly \code{mgf_path}.
 }
 \description{
-Writes exactly one MGF block per row of `fd`. A feature with real
-fragment rows in `results` (no `deconv_error`, or the column absent)
-gets a normal peak-list block; anything else — missing from `results`
-entirely, or present only as a [clean_pseudo_spectra()] sentinel row
-(`deconv_error` set) — gets an empty `DeconvERROR:<reason>` placeholder
-block instead. No feature is ever silently omitted: this is what lets
-a downstream workflow rely on the MGF covering `fd` exactly, one entry
-per row, regardless of upstream data quality.
+Writes one MGF block per row of \code{fd}, in \code{fd} order. Features with
+fragment rows get \code{TITLE}, \code{PEPMASS} (from \code{mzmed}), \code{RTINSECONDS}
+(from \code{rtmed}), \verb{CHARGE=1+}, \code{MSLEVEL=2}, \code{IONMODE} and the peaks
+sorted by m/z. Features with an error row, or missing from \code{results},
+get an empty block titled \verb{<feature_id> DeconvERROR:<reason>}
+(\code{NoAssociatedFragments} when missing). Warns if no feature has
+peaks.
 }

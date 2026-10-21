@@ -24,12 +24,13 @@
 
 #' Write a single-feature MGF block (concat-friendly)
 #'
-#' Each file is a complete `BEGIN IONS ... END IONS` — merge with
-#' `cat <dir>/*.mgf > combined.mgf`.
+#' Writes one `BEGIN IONS ... END IONS` block (`TITLE`, `PEPMASS`,
+#' optional `RTINSECONDS`, `CHARGE=1+`, peaks). Used by
+#' [clean_pseudo_spectra()] when `mgf_dir` is set. Files can be joined
+#' with `cat`.
 #'
-#' @param pseudo_spec Per-group summary for one feature — the output of a
-#'   [filter-contract] closure (as returned by [clean_pseudo_spectra()]'s
-#'   inner loop); must have `fragment_mz` and `int` columns.
+#' @param pseudo_spec Filtered per-group table with `fragment_mz` and
+#'   `int`.
 #' @param mz_target Numeric. Precursor m/z.
 #' @param feature_id Used as `TITLE=`.
 #' @param path Output `.mgf` path.
@@ -54,11 +55,11 @@ write_simple_mgf <- function(pseudo_spec, mz_target, feature_id, path,
 }
  
 
-#' Write pseudo-spectra as a combined MGF + per-feature SIRIUS .ms files
+#' Write a list of spectra as one MGF and optional SIRIUS .ms files
 #'
-#' Streams `spectra_list` to one MGF (chunked to avoid the 2^31-1 byte
-#' writeLines limit), and optionally writes one SIRIUS `.ms` file per
-#' feature into `sirius_dir`.
+#' Standalone writer for spectra you assembled yourself; the pipeline
+#' uses [export_mgf()]. Writes in chunks of `chunk_size` blocks, and one
+#' `feature_<id>.ms` file per spectrum when `sirius_dir` is set.
 #'
 #' Each element of `spectra_list` must be a list with:
 #'   \itemize{
@@ -143,29 +144,21 @@ export_pseudospectra <- function(spectra_list,
 
 #' Assemble a combined MGF from a flat pseudo-spectra results table
 #'
-#' Writes exactly one MGF block per row of `fd`. A feature with real
-#' fragment rows in `results` (no `deconv_error`, or the column absent)
-#' gets a normal peak-list block; anything else — missing from `results`
-#' entirely, or present only as a [clean_pseudo_spectra()] sentinel row
-#' (`deconv_error` set) — gets an empty `DeconvERROR:<reason>` placeholder
-#' block instead. No feature is ever silently omitted: this is what lets
-#' a downstream workflow rely on the MGF covering `fd` exactly, one entry
-#' per row, regardless of upstream data quality.
+#' Writes one MGF block per row of `fd`, in `fd` order. Features with
+#' fragment rows get `TITLE`, `PEPMASS` (from `mzmed`), `RTINSECONDS`
+#' (from `rtmed`), `CHARGE=1+`, `MSLEVEL=2`, `IONMODE` and the peaks
+#' sorted by m/z. Features with an error row, or missing from `results`,
+#' get an empty block titled `<feature_id> DeconvERROR:<reason>`
+#' (`NoAssociatedFragments` when missing). Warns if no feature has
+#' peaks.
 #'
-#' @param results data.table from clean_pseudo_spectra: one row per fragment,
-#'   with columns feature_id, mz (fragment m/z), total_intensity, and
-#'   (optionally) deconv_error. Despite the name, `total_intensity` is a
-#'   *mean*, not a sum — the mean across `(sample, ms1_scan)` cells of each
-#'   cell's summed fragment intensity. It is therefore a representative
-#'   peak height rather than total accumulated signal, so it does not grow
-#'   with sample or scan count. The name is fixed by the downstream
-#'   `modules/annotation` contract; `deconv_error` is additive.
-#' @param fd featureDefinitions (or data.frame) giving precursor m/z + RT per
-#'   feature — every row gets exactly one MGF block. Rownames or a
-#'   feature_id column must match results$feature_id.
-#' @param mgf_path output .mgf path.
-#' @param ion_mode "POSITIVE" or "NEGATIVE".
-#' @return invisibly mgf_path.
+#' @param results Output of [clean_pseudo_spectra()]: `feature_id`, `mz`,
+#'   `total_intensity`, optional `deconv_error`.
+#' @param fd Feature table with `mzmed`/`rtmed` (or `mz`/`rt`); rownames or
+#'   a `feature_id` column give the ids.
+#' @param mgf_path Output path (directories are created).
+#' @param ion_mode Written as `IONMODE=`.
+#' @return Invisibly `mgf_path`.
 #' @export
 export_mgf <- function(results, fd, mgf_path, ion_mode = "POSITIVE") {
   # --- precursor m/z + RT lookup from fd ---

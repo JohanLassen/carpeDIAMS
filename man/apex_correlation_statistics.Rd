@@ -7,32 +7,29 @@
 apex_correlation_statistics(min_count = 10L)
 }
 \arguments{
-\item{min_count}{Minimum `(sample, ms1_scan)` observation count per
-group before Pearson r is computed.}
+\item{min_count}{Groups need more than this many \verb{(sample, ms1_scan)}
+cells to be scored.}
 }
 \value{
-A statistics closure — see [stats-contract].
+A statistics closure — see \link{stats-contract}.
 }
 \description{
-As [correlation_statistics()], plus two extra per-group columns
-summarising the intra-sample MS1 <-> MS2 apex-centroid shift across
-samples:
+As \code{\link[=correlation_statistics]{correlation_statistics()}}, plus two columns that compare where
+the fragment and the precursor elute. Per sample, \code{m1} is the
+MS1-intensity-weighted mean scan of the precursor trace, \code{m2} the
+fragment-intensity-weighted mean scan of the group, and the shift is
+\code{m2 - m1} (in scans):
 }
 \details{
 \itemize{
-  \item `apex_shift_med` — median across samples of the intensity-weighted
-    `(m2 - m1)` scan-index centroid difference.
-  \item `apex_shift_iqr` — IQR of the same across samples.
+\item \code{apex_shift_med}: median shift across samples.
+\item \code{apex_shift_iqr}: IQR of the shift across samples.
 }
 
-MS1 centroids are computed on the deduplicated per-`(sample, ms1_scan)`
-MS1 intensity trace so each scan is weighted once by `ms1_int`, not
-`ms1_int x N_fragments_at_that_scan` (the earlier all-rows form biased
-the centroid toward groups whose fragments cluster at the apex).
-
-Conforms to [stats-contract]. Pair with [apex_correlation_filtering()],
-which additionally thresholds on the two apex-shift columns.
+A real fragment co-elutes with its precursor, so its shift is near 0
+in every sample. Conforms to \link{stats-contract}; pair with
+\code{\link[=apex_correlation_filtering]{apex_correlation_filtering()}}.
 }
 \seealso{
-[correlation_statistics()], [apex_correlation_filtering()]
+\code{\link[=correlation_statistics]{correlation_statistics()}}, \code{\link[=apex_correlation_filtering]{apex_correlation_filtering()}}
 }

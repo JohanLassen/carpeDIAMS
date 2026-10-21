@@ -7,27 +7,28 @@
 correlation_statistics(min_count = 10L)
 }
 \arguments{
-\item{min_count}{Minimum `(sample, ms1_scan)` observation count per
-group before Pearson r is computed.}
+\item{min_count}{Groups need more than this many \verb{(sample, ms1_scan)}
+cells to be scored.}
 }
 \value{
-A statistics closure — see [stats-contract].
+A statistics closure — see \link{stats-contract}.
 }
 \description{
-Returns a statistics closure that aggregates `dt` to
-`(group, sample, ms1_scan)`, drops groups with fewer than `min_count`
-observations, and computes per-group Pearson correlation between
-summed MS2 intensity and MS1 intensity, its p-value, and the
-BH-adjusted FDR. No thresholding is applied — see
-[correlation_filtering()] for the paired filter.
+For each fragment group:
 }
 \details{
-The reported `fragment_mz` is the per-group consensus m/z computed
-upstream by [process_pseudo_spec()]; this closure carries it through
-and does not recompute it.
+\enumerate{
+\item Sum fragment intensity per \verb{(sample, ms1_scan)} cell.
+\item Drop the group unless it has \strong{more than} \code{min_count} cells.
+\item Pearson correlation between the cell sums and the MS1 intensity,
+across all cells of all samples, with a two-sided t-test p-value.
+\item Benjamini–Hochberg FDR across the groups of this feature.
+}
 
-Conforms to [stats-contract].
+Output columns: \code{int} is the mean cell sum, \code{count} the number of
+cells, \code{n_samples} the number of samples. Conforms to
+\link{stats-contract}; pair with \code{\link[=correlation_filtering]{correlation_filtering()}}.
 }
 \seealso{
-[apex_correlation_statistics()], [correlation_filtering()]
+\code{\link[=apex_correlation_statistics]{apex_correlation_statistics()}}, \code{\link[=correlation_filtering]{correlation_filtering()}}
 }

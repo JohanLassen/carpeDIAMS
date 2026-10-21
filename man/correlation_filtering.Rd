@@ -12,17 +12,17 @@ correlation_filtering(cor_thresh = 0.3, fdr_thresh = 0.01)
 \item{fdr_thresh}{Maximum BH-adjusted FDR to keep.}
 }
 \value{
-A filter closure — see [filter-contract].
+A filter closure — see \link{filter-contract}.
 }
 \description{
-Returns a filter closure that keeps rows whose Pearson correlation is
-at least `cor_thresh` and whose BH-adjusted FDR is at most
-`fdr_thresh`. Operates on the per-group summary produced by a
-[stats-contract] closure (typically [correlation_statistics()]).
+Keeps groups with \code{correlation >= cor_thresh} and \code{fdr <= fdr_thresh}.
+Groups with \code{NA} correlation are dropped. Conforms to
+\link{filter-contract}.
 }
 \details{
-Conforms to [filter-contract].
+The factory defaults (0.3, 0.01) differ from the defaults the
+\verb{process_*()} functions build when \code{filter_fn = NULL} (0.1, 0.1).
 }
 \seealso{
-[apex_correlation_filtering()], [correlation_statistics()]
+\code{\link[=apex_correlation_filtering]{apex_correlation_filtering()}}, \code{\link[=correlation_statistics]{correlation_statistics()}}
 }

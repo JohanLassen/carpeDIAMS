@@ -2,7 +2,7 @@
 % Please edit documentation in R/export.R
 \name{export_pseudospectra}
 \alias{export_pseudospectra}
-\title{Write pseudo-spectra as a combined MGF + per-feature SIRIUS .ms files}
+\title{Write a list of spectra as one MGF and optional SIRIUS .ms files}
 \usage{
 export_pseudospectra(
   spectra_list,
@@ -14,28 +14,28 @@ export_pseudospectra(
 \arguments{
 \item{spectra_list}{As described above.}
 
-\item{mgf_path}{Output `.mgf` path.}
+\item{mgf_path}{Output \code{.mgf} path.}
 
-\item{sirius_dir}{Optional directory for per-feature `.ms` files. `NULL`
+\item{sirius_dir}{Optional directory for per-feature \code{.ms} files. \code{NULL}
 (default) skips SIRIUS output entirely.}
 
-\item{chunk_size}{Integer. MGF entries buffered before each `writeLines`.}
+\item{chunk_size}{Integer. MGF entries buffered before each \code{writeLines}.}
 }
 \value{
-Invisibly `NULL`.
+Invisibly \code{NULL}.
 }
 \description{
-Streams `spectra_list` to one MGF (chunked to avoid the 2^31-1 byte
-writeLines limit), and optionally writes one SIRIUS `.ms` file per
-feature into `sirius_dir`.
+Standalone writer for spectra you assembled yourself; the pipeline
+uses \code{\link[=export_mgf]{export_mgf()}}. Writes in chunks of \code{chunk_size} blocks, and one
+\verb{feature_<id>.ms} file per spectrum when \code{sirius_dir} is set.
 }
 \details{
-Each element of `spectra_list` must be a list with:
-  \itemize{
-    \item `peaks` — data.frame with columns `mz`, `total_intensity`
-    \item `feature_id` — character, used as MGF `TITLE=` and SIRIUS `>compound`
-    \item `mz_target` — numeric, precursor m/z
-    \item `rtmed` — numeric, retention time in seconds
-    \item `ESI` — character, "POSITIVE" / "NEGATIVE"
-  }
+Each element of \code{spectra_list} must be a list with:
+\itemize{
+\item \code{peaks} — data.frame with columns \code{mz}, \code{total_intensity}
+\item \code{feature_id} — character, used as MGF \verb{TITLE=} and SIRIUS \verb{>compound}
+\item \code{mz_target} — numeric, precursor m/z
+\item \code{rtmed} — numeric, retention time in seconds
+\item \code{ESI} — character, "POSITIVE" / "NEGATIVE"
+}
 }

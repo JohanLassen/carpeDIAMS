@@ -2,7 +2,7 @@
 % Please edit documentation in R/api.R
 \name{process_mzml}
 \alias{process_mzml}
-\title{Process a single mzML file into a pseudo-spectra MGF}
+\title{Build a pseudo-spectra MGF from one mzML file}
 \usage{
 process_mzml(
   path,
@@ -17,27 +17,42 @@ process_mzml(
 \arguments{
 \item{path}{mzML file path.}
 
-\item{tmp_dir}{working directory for intermediate parquet + outputs.}
+\item{tmp_dir}{Directory for the intermediate parquets.}
 
-\item{output}{MGF path. `NULL` (default) writes to
-`file.path(tmp_dir, "all_features.mgf")` for backward compatibility.}
+\item{output}{MGF path. Required: the function stops before reading
+any data if it is \code{NULL}.}
 
-\item{rt_range}{retention-time window (seconds) to retain.}
+\item{rt_range}{Retention-time window (seconds) to keep.}
 
-\item{grouper}{A grouper closure (see [grouper-contract]); `NULL`
-uses `ppm_upgma(ppm = 30)`.}
+\item{grouper}{A grouper closure (see \link{grouper-contract}); \code{NULL}
+uses \code{ppm_upgma(ppm = 30)}.}
 
-\item{group_statistics_fn}{A statistics closure (see [stats-contract]);
-`NULL` uses `correlation_statistics()`.}
+\item{group_statistics_fn}{A statistics closure (see \link{stats-contract});
+\code{NULL} uses \code{correlation_statistics(min_count = 10)}.}
 
-\item{filter_fn}{A filter closure (see [filter-contract]); `NULL`
-uses `correlation_filtering(cor_thresh = 0.1, fdr_thresh = 0.1)`.}
+\item{filter_fn}{A filter closure (see \link{filter-contract}); \code{NULL}
+uses \code{correlation_filtering(cor_thresh = 0.1, fdr_thresh = 0.1)}.}
 }
 \value{
-cleaned pseudo-spectra data.table (invisibly written to MGF too).
+The \code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}} table. The MGF is written as a
+side effect.
 }
 \description{
-Process a single mzML file into a pseudo-spectra MGF
+Single-sample route with no prior feature list. Steps:
+}
+\details{
+\enumerate{
+\item Read the file and keep spectra inside \code{rt_range}.
+\item If no spectrum is labelled MS2, assign MS levels by scan-index
+parity (bbCID alternates MS1/MS2). Aborts if the split is badly
+unbalanced.
+\item Detect chromatographic peaks with centWave (fixed parameters:
+\code{peakwidth = c(2, 30)}, \code{snthresh = 6}, \code{ppm = 12},
+\code{prefilter = c(3, 1000)}, \code{mzdiff = 0.01}).
+\item Write pool/pointer parquets to \code{tmp_dir} and build one
+pseudo-spectrum per peak with \code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}}.
+\item Write the MGF with \code{\link[=export_mgf]{export_mgf()}}.
+}
 }
 \seealso{
 Other api:

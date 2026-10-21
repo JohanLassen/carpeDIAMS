@@ -7,20 +7,20 @@
 ppm_upgma(ppm = 30)
 }
 \arguments{
-\item{ppm}{Numeric. Tolerance in parts per million.}
+\item{ppm}{Maximum group width, in ppm of \code{target_mz}.}
 }
 \value{
-A grouper closure - see [grouper-contract].
+A grouper closure - see \link{grouper-contract}.
 }
 \description{
-Returns a grouper closure that calls the package's C++ 1-D UPGMA
-implementation with `maxDiff = 1e-6 * target_mz * ppm`.
-Uses `mz` and `target_mz`; ignores `intensity`, `scan`, `ms1_int`.
+1-D UPGMA on the sorted m/z values, cut so that no group is wider
+(max m/z − min m/z) than \code{ppm} of the precursor m/z. Uses \code{mz} and
+\code{target_mz}.
 }
 \examples{
 g <- ppm_upgma(ppm = 30)
 g(c(100.0, 100.001, 200.0), target_mz = 100)
 }
 \seealso{
-[abs_upgma()], [iaac_grouper()], [pelt_grouper()], [validate_grouper()]
+\code{\link[=abs_upgma]{abs_upgma()}}, \code{\link[=iaac_grouper]{iaac_grouper()}}, \code{\link[=pelt_grouper]{pelt_grouper()}}, \code{\link[=validate_grouper]{validate_grouper()}}
 }

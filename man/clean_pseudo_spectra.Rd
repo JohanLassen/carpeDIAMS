@@ -17,101 +17,86 @@ clean_pseudo_spectra(
   group_statistics_fn = NULL,
   filter_fn = NULL,
   consensus_mz_fn = NULL,
+  apex_source = c("recompute", "upstream"),
+  window_mode = c("buffer", "fwhm"),
   require_rt = FALSE,
   batch_idx = NULL,
   n_batches = 1L,
   report = TRUE,
   report_path = "pseudo_specs_report.pdf",
   mgf_dir = NULL,
-  fetch_chunk_size = 200L,
+  fetch_chunk_size = 50L,
   progress = TRUE
 )
 }
 \arguments{
 \item{targets}{Character vector of feature ids.}
 
-\item{file_directory}{Path to pool/pointer parquets.}
+\item{file_directory}{Directory with the per-sample parquets.}
 
-\item{fd}{Optional `featureDefinitions()`-shaped frame; supplies
-`mzmed` and `rtmed` per target. A target missing from `fd`, or whose
-`mzmed` (or, when `require_rt = TRUE`, `rtmed`) is `NA`, is reported
-as a `"MissingTargetInfo"` sentinel row rather than processed.}
+\item{fd}{Optional table with \code{mzmed} and \code{rtmed} (or \code{mz}/\code{rt}), with
+rownames or a \code{feature_id} column matching \code{targets}. Without it the
+precursor m/z comes from the parquets and RT is unknown.}
 
-\item{con}{Optional pre-opened connection (else opened + closed internally).}
+\item{con}{Optional open connection from \code{\link[=setup_connection]{setup_connection()}}; it is
+left open.}
 
-\item{grouper}{A grouper closure - see [grouper-contract]. Used for
-both of [process_pseudo_spec()]'s passes (within-sample, then
-across-sample).}
+\item{grouper}{A grouper closure (\link{grouper-contract}).}
 
-\item{buffer, fdr_thresh, cor_thresh, min_count}{Tunables passed downstream.
-`min_count` is consumed by the default `group_statistics_fn`;
-`cor_thresh` / `fdr_thresh` are consumed by the default `filter_fn`.
-A custom `group_statistics_fn` / `filter_fn` may ignore them.}
+\item{buffer}{Passed to \code{\link[=process_pseudo_spec]{process_pseudo_spec()}}.}
 
-\item{group_statistics_fn}{A statistics closure conforming to
-[stats-contract] — receives the raw per-feature dt (with `group`
-column) and returns the per-group summary (no thresholding).
-`NULL` (default) uses [correlation_statistics()] with `min_count`.
-Swap in [apex_correlation_statistics()] to add apex-shift columns.}
+\item{fdr_thresh, cor_thresh}{Used only to build the default \code{filter_fn}.}
 
-\item{filter_fn}{A filter closure conforming to [filter-contract] —
-receives the per-group stats table and returns a row-subset.
-`NULL` (default) uses [correlation_filtering()] with
-`cor_thresh`/`fdr_thresh`. Swap in [apex_correlation_filtering()]
-for apex-aware thresholding (pair with
-[apex_correlation_statistics()]).}
+\item{min_count}{Used only to build the default \code{group_statistics_fn}.}
 
-\item{consensus_mz_fn}{A consensus-mz closure - see
-[consensus-mz-contract]. `NULL` (default) uses
-[consensus_mz_weighted()] - the package's long-standing default.}
+\item{group_statistics_fn}{A statistics closure (\link{stats-contract});
+\code{NULL} uses \code{correlation_statistics(min_count)}.}
 
-\item{require_rt}{Logical. When `TRUE`, a target whose `fd$rtmed` is
-`NA` is also reported as `"MissingTargetInfo"` (not just `mzmed`).
-Set by routes where RT drives scan extraction upstream (the
-target-list route); `FALSE` (default) for routes where RT is purely
-informational (the xcms route, where per-sample scan windows come
-from `chromPeaks`, not this feature-level summary).}
+\item{filter_fn}{A filter closure (\link{filter-contract}); \code{NULL} uses
+\code{correlation_filtering(cor_thresh, fdr_thresh)}.}
 
-\item{batch_idx, n_batches}{Optional slice: process only batch
-`batch_idx` of `n_batches` equal contiguous chunks of `targets`.
-`batch_idx = NULL` (default) processes every target in-process.
-Set both for the DAG-batched `stage = "filter"` path.}
+\item{consensus_mz_fn, apex_source, window_mode}{Passed to
+\code{\link[=process_pseudo_spec]{process_pseudo_spec()}}.}
 
-\item{report, report_path}{PDF diagnostic report on/off + path.}
+\item{require_rt}{If \code{TRUE}, a target without RT in \code{fd} is a
+\code{"MissingTargetInfo"} error. The target-list route sets this.}
 
-\item{mgf_dir}{Optional directory for per-feature MGFs.}
+\item{batch_idx, n_batches}{Process only slice \code{batch_idx} (1-based)
+of \code{targets} split into \code{n_batches} contiguous chunks. A slice past
+the end returns an empty table.}
+
+\item{report, report_path}{Write diagnostic plots per feature to a PDF
+(needs ggplot2). \strong{On by default}; the \verb{process_*()} functions turn
+it off.}
+
+\item{mgf_dir}{If set, also write one MGF file per feature here.}
 
 \item{fetch_chunk_size}{Features per DuckDB query.}
 
-\item{progress}{Print a per-feature progress counter.}
+\item{progress}{Show a progress bar.}
 }
 \value{
-A `data.table` matching the legacy 02_filter_features schema:
-  `mz_g2, grouped_mz, mz, total_intensity, n_samples, count, r, t_stat,
-  p_value, fdr, feature_id`, plus `deconv_error` (`NA` on real rows).
-  `mz_g2` and `mz` both carry the per-group consensus m/z.
-  `total_intensity` is a *mean* despite the name — the mean across
-  `(sample, ms1_scan)` cells of each cell's summed fragment intensity,
-  i.e. a representative peak height that does not scale with sample or
-  scan count. Column names are fixed by the downstream
-  `modules/annotation` contract; `deconv_error` is additive — consumers
-  reading these rows directly (bypassing [export_mgf()]) should filter
-  `is.na(deconv_error)` to get only real fragment rows.
+\code{data.table} with one row per kept fragment: \code{mz_g2} and \code{mz}
+(both the consensus fragment m/z), \code{grouped_mz} (group id),
+\code{total_intensity} (mean per-cell intensity, not a sum), \code{n_samples},
+\code{count}, \code{r}, \code{t_stat}, \code{p_value}, \code{fdr}, \code{feature_id},
+\code{deconv_error} (\code{NA} on real rows). Column names are what
+\code{\link[=export_mgf]{export_mgf()}} reads.
 }
 \description{
-Orchestrates: connect → fetch → per-feature [process_pseudo_spec()]
-(grouper + `group_statistics_fn`) → `filter_fn` → optional plot / MGF.
-Returns a `data.table` in the schema downstream `03_make_mgf.R` expects.
+Runs \code{\link[=process_pseudo_spec]{process_pseudo_spec()}} and \code{filter_fn} for every target, reading
+the per-sample parquets in \code{file_directory} through DuckDB. This is
+the work behind the \code{filter} and \code{finalize} stages.
 }
 \details{
-Guarantees exactly one outcome per element of `targets`: either real
-fragment rows, or a single [.deconv_error_row()] sentinel (`deconv_error`
-set to a reason code — `"MissingTargetInfo"`, `"MissingMs1Signal"`, or
-`"NoAssociatedFragments"`). No target is ever silently dropped from the
-return value; nothing here aborts on bad input, including a target
-directory with no pointer parquets at all. This is what lets
-[export_mgf()] guarantee one MGF block per `fd` row regardless of data
-quality — the property [process_xcms()]/[process_targetlist()] batching
-depends on, since each batch must independently account for its own
-slice of targets.
+Every target gives either fragment rows or exactly one error row with
+\code{deconv_error} set to:
+\itemize{
+\item \code{"MissingTargetInfo"}: no precursor m/z (or no RT when
+\code{require_rt = TRUE}).
+\item \code{"MissingMs1Signal"}: no pointer rows for the target, or no pointer
+parquets at all.
+\item \code{"NoAssociatedFragments"}: no group survived statistics or filtering,
+or \code{\link[=process_pseudo_spec]{process_pseudo_spec()}} raised an error (errors are not shown).
+}
 }

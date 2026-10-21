@@ -31,9 +31,6 @@ export(subset_samples_xcms)
 export(validate_grouper)
 export(write_simple_mgf)
 import(DBI)
-import(MsExperiment)
-import(S4Vectors)
-import(Spectra)
 import(arrow)
 import(cli)
 import(dplyr)
@@ -43,14 +40,42 @@ import(readr)
 import(reticulate)
 import(tibble)
 import(tidyr)
-import(xcms)
+importFrom(MsExperiment,
+  "sampleData<-",
+  "spectra<-",
+  MsExperiment,
+  linkSampleData,
+  spectra
+)
 importFrom(Rcpp,sourceCpp)
+importFrom(S4Vectors,DataFrame)
+importFrom(Spectra,
+  MsBackendMzR,
+  Spectra,
+  acquisitionNum,
+  dataOrigin,
+  filterAcquisitionNum,
+  filterDataOrigin,
+  msLevel,
+  peaksData,
+  spectraData
+)
 importFrom(data.table,
   ":=",
   .I,
   .SD,
+  as.data.table,
   data.table,
+  rbindlist,
   setDT,
   setkey
+)
+importFrom(stats,quantile)
+importFrom(xcms,
+  CentWaveParam,
+  chromPeakData,
+  chromPeaks,
+  fileNames,
+  findChromPeaks
 )
 useDynLib(carpeDIAMS, .registration = TRUE)

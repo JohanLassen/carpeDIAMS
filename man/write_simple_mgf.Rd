@@ -7,23 +7,24 @@
 write_simple_mgf(pseudo_spec, mz_target, feature_id, path, rt = NA_real_)
 }
 \arguments{
-\item{pseudo_spec}{Per-group summary for one feature — the output of a
-[filter-contract] closure (as returned by [clean_pseudo_spectra()]'s
-inner loop); must have `fragment_mz` and `int` columns.}
+\item{pseudo_spec}{Filtered per-group table with \code{fragment_mz} and
+\code{int}.}
 
 \item{mz_target}{Numeric. Precursor m/z.}
 
-\item{feature_id}{Used as `TITLE=`.}
+\item{feature_id}{Used as \verb{TITLE=}.}
 
-\item{path}{Output `.mgf` path.}
+\item{path}{Output \code{.mgf} path.}
 
-\item{rt}{Optional retention time (seconds); skipped when `NA`.}
+\item{rt}{Optional retention time (seconds); skipped when \code{NA}.}
 }
 \value{
-Invisibly `path`, or `NULL` when `pseudo_spec` is empty.
+Invisibly \code{path}, or \code{NULL} when \code{pseudo_spec} is empty.
 }
 \description{
-Each file is a complete `BEGIN IONS ... END IONS` — merge with
-`cat <dir>/*.mgf > combined.mgf`.
+Writes one \verb{BEGIN IONS ... END IONS} block (\code{TITLE}, \code{PEPMASS},
+optional \code{RTINSECONDS}, \verb{CHARGE=1+}, peaks). Used by
+\code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}} when \code{mgf_dir} is set. Files can be joined
+with \code{cat}.
 }
 \keyword{internal}

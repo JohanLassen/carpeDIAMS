@@ -10,6 +10,15 @@ Turns DIA (bbCID) acquisitions into pseudo-DDA spectra by correlating MS1
 elution with MS2 fragment elution across many samples. Produces an MGF
 that downstream library/annotation tools consume.
 }
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://johanlassen.github.io/carpeDIAMS/}
+  \item \url{https://github.com/JohanLassen/carpeDIAMS}
+  \item Report bugs at \url{https://github.com/JohanLassen/carpeDIAMS/issues}
+}
+
+}
 \author{
 \strong{Maintainer}: Johan Lassen \email{johan@example.com}
 

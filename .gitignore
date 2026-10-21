@@ -19,3 +19,4 @@ tmp/
 # ...except committed test fixtures (see tests/testthat/test-process_pseudo_spec.R
 # and vignettes/developer.Rmd, which both need inst/testdata/ on a fresh clone)
 !inst/testdata/**/*.rds
+docs

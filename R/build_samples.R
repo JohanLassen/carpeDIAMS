@@ -1,23 +1,22 @@
 #' Extract per-feature chromPeaks rows from an XCMSnExp
 #'
-#' Returns, per feature in `fd`, the matrix of `chromPeaks` rows that belong
-#' to it (via `peakidx`). Reads `xcms::chromPeaks(object)` internally, so
-#' `object` must be the full msobject that `fd` was built from — subsetting
-#' the msobject changes row indices and breaks the `peakidx` <->
-#' `chromPeaks` invariant.
+#' For each feature in `fd`, the rows of `all_peaks` listed in its
+#' `peakidx`.
 #'
-#' @param object An `XCMSnExp`. Source of `chromPeaks`.
-#' @param fd `featureDefinitions()` table (rows = features, `peakidx` list-col).
-#' @param sample_filter Optional integer vector; keep only peaks from these samples.
-#' @return Named list of chromPeaks-row matrices (one per feature id).
+#' @param object Unused.
+#' @param fd `featureDefinitions()` table with a `peakidx` list column.
+#' @param all_peaks `chromPeaks()` of the object `fd` came from. Must be
+#'   the full, unsubsetted table, because `peakidx` indexes its rows.
+#' @param sample_filter Optional sample indices (into `all_peaks[, "sample"]`)
+#'   to keep.
+#' @return Named list (by feature id) of peak matrices; empty matrices
+#'   for features with no peaks.
 #' @keywords internal
 #' @export
-getBackendPeaks <- function(object, fd, sample_filter = NULL) {
+getBackendPeaks <- function(object, fd, all_peaks, sample_filter = NULL) {
   # all_peaks must be the chromPeaks from the FULL (pre-subset) msobject that
   # fd was built from — subsetting the msobject changes row indices and breaks
-  # the peakidx ↔ chromPeaks invariant. Pass mssubset$peaks here.
   
-  all_peaks <- xcms::chromPeaks(object)
   peak_cols <- colnames(all_peaks)
   empty_mat <- matrix(nrow = 0, ncol = length(peak_cols),
                       dimnames = list(NULL, peak_cols))
@@ -69,16 +68,21 @@ get_scans_optimized <- function(feature_id, dataOrigin, rtmin, rtmax, rt, sample
 
 #' Map feature peaks to scan indices in the Spectra backend
 #'
-#' Joins per-feature chromPeaks (from [getBackendPeaks()]) to the Spectra
-#' backend's per-scan metadata, producing one row per (feature, sample) with
-#' the scan indices inside the peak RT window plus the apex scan.
+#' For each (feature, sample), takes the most intense peak (largest
+#' `into`) and lists the scans whose retention time lies in
+#' `[rtmin, rtmax]`, plus the scan closest to the peak `rt`. Uses
+#' `rtime_adjusted` when present, else `rtime`.
 #'
 #' @param feature_peaks Output of [getBackendPeaks()].
-#' @param filenames Character vector in `sample` order — typically
-#'   `xcms::fileNames(msobject)`.
-#' @param spectra_df Backend metadata, e.g.
-#'   `Spectra::spectra(msobject)@backend@spectraData@listData |> dplyr::bind_cols()`.
-#' @return Tibble: `sample, filename, mz, feature, scan_indices, apex_scan_index, n_scans`.
+#' @param filenames File paths indexed by the peaks' `sample` column,
+#'   matching `spectra_df$dataOrigin`.
+#' @param spectra_df Per-scan metadata with `dataOrigin`,
+#'   `acquisitionNum` and `rtime`, e.g.
+#'   `as.data.frame(Spectra::spectraData(sps))`.
+#' @param target_list If `TRUE`, keep every peak per (feature, sample)
+#'   instead of only the most intense.
+#' @return Tibble with `sample, filename, mz, feature, scan_indices`
+#'   (list), `apex_scan_index, n_scans`.
 #' @keywords internal
 #' @export
 extractScanInfo <- function(feature_peaks, filenames, spectra_df, target_list = FALSE){
@@ -108,17 +112,25 @@ extractScanInfo <- function(feature_peaks, filenames, spectra_df, target_list = 
 
 #' Build pool + pointer parquets for one sample
 #'
-#' Writes `sample_<id>_pool.parquet` (all MS2 fragments in the file) and
-#' `sample_<id>_pointers.parquet` (one row per feature x MS1 scan, with
-#' summed MS1 intensity). Together these feed [clean_pseudo_spectra()].
+#' Reads the scans of one file between the lowest and highest scan in
+#' `single_sample` (± `buffer`) and writes two parquets to `output_dir`:
 #'
-#' @param single_sample Tibble from [extractScanInfo()] restricted to one file.
-#' @param spectra_object Full `Spectra` object (`Spectra::spectra(msobject)`).
-#' @param output_dir Directory to write the two parquets.
-#' @param maxDiff Numeric. m/z tolerance for the MS1 ↔ precursor foverlaps join.
-#' @param buffer Integer. Scan-window slack on each side of the feature's range.
-#' @param return_spectra Logical. If `TRUE`, also return pool + pointers as tibbles.
-#' @return `NULL` (or `list(pool, pointer)` if `return_spectra = TRUE`).
+#' * `sample_<id>_pool.parquet`: every MS2 centroid in that scan range
+#'   (`sample, scan, rt, mz, int`).
+#' * `sample_<id>_pointers.parquet`: for each feature and each MS1 scan
+#'   within its scan range ± `buffer`, the summed intensity of MS1
+#'   centroids within `maxDiff` Da of the precursor (`feature, scan,
+#'   mz_target, apex_scan, ms1_int, mz, rt, sample`).
+#'
+#' @param single_sample One file's rows from [extractScanInfo()] (or the
+#'   same columns built from a target list).
+#' @param spectra_object `Spectra` object containing that file.
+#' @param output_dir Output directory.
+#' @param maxDiff MS1 m/z tolerance in Da.
+#' @param buffer Extra scans on each side.
+#' @param return_spectra If `TRUE`, also return the two tables.
+#' @return `NULL`, or `list(pool, pointer)` when `return_spectra = TRUE`.
+#'   Returns `NULL` without writing if no scans are in range.
 #' @keywords internal
 #' @export
 Ms2PseudoRaw <- function(
@@ -147,22 +159,23 @@ Ms2PseudoRaw <- function(
     mz = pks_matrix[, 1],
     int = pks_matrix[, 2],
     scan = rep(Spectra::acquisitionNum(b), n_peaks),
+    rt = rep(Spectra::rtime(b), n_peaks),
     mslevel = rep(Spectra::msLevel(b), n_peaks)
   )
   rm(b, pks_list, pks_matrix); gc()
-  
+
   # 2. CREATE THE POOL: All unique MS2 fragments for this sample
   # We only save this ONCE per sample. No duplication.
   ms2_pool <- all_ms |>
     dplyr::filter(mslevel == 2) |>
     dplyr::mutate(sample = sample_id) |>
-    dplyr::select(sample, scan, mz, int) |>
+    dplyr::select(sample, scan, rt, mz, int) |>
     dplyr::arrange(scan)
 
   arrow::write_parquet(ms2_pool, file.path(output_dir, paste0("sample_", sample_id, "_pool.parquet")))
 
   # Keep MS1 in RAM for the loop
-  ms1_all <- all_ms[all_ms$mslevel == 1, c("mz", "int", "scan")]
+  ms1_all <- all_ms[all_ms$mslevel == 1, c("mz", "int", "scan", "rt")]
   rm(all_ms); gc()
 
   # 3. CREATE POINTERS: Loop through features
@@ -199,9 +212,9 @@ Ms2PseudoRaw <- function(
   # Then: filter scan range in a second step
   matched <- matched[scan >= scan_lo & scan <= scan_hi]
 
-  # Summarize
+  # Summarize (rt is constant per scan - carried through, not aggregated)
   pointer_results <- matched[,
-    .(ms1_int = sum(int), mz = mean(mz)),
+    .(ms1_int = sum(int), mz = mean(mz), rt = rt[1]),
     by = .(feature, scan, mz_target, apex_scan)
   ][, sample := sample_id] |> bind_rows()
 
@@ -222,21 +235,21 @@ Ms2PseudoRaw <- function(
 
 #' Build pool + pointer parquets for one sample, from a subsetted msobject
 #'
-#' Stage-01 orchestrator: takes the output of [subset_samples_xcms()] and
-#' calls [Ms2PseudoRaw()] for one `sample_id`.
+#' The work behind `process_xcms(stage = "sample")`: looks up the
+#' sample's peaks for `qualifying_features`, widens their RT windows by
+#' `rt_buffer`, maps them to scans with [extractScanInfo()], and calls
+#' [Ms2PseudoRaw()]. Writes nothing if the sample has no qualifying
+#' features or no matching scans.
 #'
 #' @param mssubset Output of [subset_samples_xcms()].
 #' @param fd `featureDefinitions()` table.
-#' @param out_dir Directory for the two parquets.
-#' @param sample_id Integer. 1-based index into the subsetted msobject.
-#' @param top_n Integer. Keep the top-N samples per feature (by assay
-#'   intensity) — restricts which features get built for this sample.
-#' @param ppm Numeric or `NULL`. Fragment tolerance in ppm; when set,
-#'   `maxDiff` is derived from `max(scan_info$mz) * ppm * 1e-6`.
-#'   `NULL` keeps the legacy 0.005 Da tolerance.
-#' @param rt_buffer Numeric. Seconds added to each side of every peak's
-#'   RT window before scan extraction (compensates for alignment jitter).
-#' @return Invisibly `NULL`. Writes two parquets to `out_dir`.
+#' @param out_dir Output directory (created if missing).
+#' @param sample_id Index into `fileNames(mssubset$msobject)`.
+#' @param qualifying_features Feature ids to build for this sample.
+#' @param ppm MS1 tolerance in ppm, converted to Da at the largest
+#'   feature m/z in this sample. `NULL` uses 0.005 Da.
+#' @param rt_buffer Seconds added to both sides of each peak's RT window.
+#' @return `NULL`.
 #' @keywords internal
 #' @export
 build_parquets_xcms <- function(
@@ -244,7 +257,7 @@ build_parquets_xcms <- function(
     fd,
     out_dir,
     sample_id,
-    top_n     = 10L,
+    qualifying_features,
     ppm       = NULL,
     rt_buffer = 0
 ) {
@@ -254,25 +267,23 @@ build_parquets_xcms <- function(
         dir.create(out_dir, recursive = TRUE)
     }
 
+    if (length(qualifying_features) == 0) {
+        message("Sample ", sample_id, ": no features to build after top_n filter.")
+        return(invisible(NULL))
+    }
+
     msobject <- mssubset$msobject
-    assay <- mssubset$assay
     sps_obj <- MsExperiment::spectra(msobject)
     spectra_df <- as.data.frame(Spectra::spectraData(sps_obj))
     filenames <- xcms::fileNames(msobject)
-    sample_file <- basename(filenames[sample_id])
-    assay <- tibble::as_tibble(assay, rownames = "name")
-    colnames(assay) <- c("name", rownames(fd))
 
-    topX <-
-        assay |>
-        tidyr::pivot_longer(cols = -"name", names_to = "feature_id") |>
-        tidyr::replace_na(list(value = 0)) |>
-        dplyr::group_by(feature_id) |>
-        dplyr::slice_max(value, n = top_n) |>
-        dplyr::ungroup()  |>
-        dplyr::filter(name == sample_file)
-
-    feature_peaks <- getBackendPeaks(msobject, fd = fd, sample_filter = sample_id)
+    fd_sub <- fd[qualifying_features, , drop = FALSE]
+    full_idx <- match(basename(filenames[sample_id]), basename(mssubset$all_files))
+    feature_peaks <- getBackendPeaks(msobject, all_peaks = mssubset$peaks, fd = fd_sub, sample_filter = full_idx)
+    feature_peaks <- lapply(feature_peaks, function(m) {
+      if (nrow(m)) m[, "sample"] <- sample_id
+      m
+      })
     if (rt_buffer > 0) {
         feature_peaks <- lapply(feature_peaks, function(m) {
             if (nrow(m) == 0) return(m)
@@ -281,8 +292,7 @@ build_parquets_xcms <- function(
             m
         })
     }
-    scan_info <- extractScanInfo(feature_peaks, filenames, spectra_df) |>
-        dplyr::filter(feature %in% topX$feature_id)
+    scan_info <- extractScanInfo(feature_peaks, filenames, spectra_df)
 
     if (nrow(scan_info) == 0) {
         message("Sample ", sample_id, ": no features to build after top_n filter.")
@@ -292,7 +302,7 @@ build_parquets_xcms <- function(
     current_spectra <- sps_obj |>
         Spectra::filterDataOrigin(scan_info$filename[1])
 
-    rm(mssubset, msobject, sps_obj, assay, spectra_df, filenames, feature_peaks, fd, topX); gc()
+    rm(mssubset, msobject, sps_obj, spectra_df, filenames, feature_peaks, fd, fd_sub); gc()
 
     max_diff <- if (!is.null(ppm)) {
         max(scan_info$mz, na.rm = TRUE) * ppm * 1e-6

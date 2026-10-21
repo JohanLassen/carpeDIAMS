@@ -7,38 +7,28 @@
 pelt_grouper(beta = -1, p0 = 5, Isat = 50000, max_seg = 0L)
 }
 \arguments{
-\item{beta}{Numeric. Penalty per additional segment; `<= 0` picks
-`2 * log(n)`.}
+\item{beta}{Penalty per group; \verb{<= 0} uses \code{2 * log(n)}.}
 
-\item{p0}{Numeric. Floor mass accuracy in ppm.}
+\item{p0}{Mass accuracy floor (ppm) reached at high intensity.}
 
-\item{Isat}{Numeric. Intensity at which per-point precision plateaus at `p0`.}
+\item{Isat}{Intensity at which the uncertainty reaches \code{p0}.}
 
-\item{max_seg}{Integer. Maximum group size; `0` = unlimited.}
+\item{max_seg}{Maximum centroids per group (\code{0} = no limit). Bounds
+run time at \code{O(n * max_seg)}; the result is optimal under the cap.}
 }
 \value{
-A grouper closure - see [grouper-contract].
+A grouper closure - see \link{grouper-contract}.
 }
 \description{
-Returns a grouper closure that calls the package's C++ 1-D PELT
-implementation. Unlike the greedy UPGMA / IAAC variants, PELT
-globally minimises the total per-segment shot-noise cost plus a
-`beta`-weighted segment count — the exact optimum over 1-D
-partitions. Uses `mz` and `intensity`; ignores `target_mz`, `scan`,
-`ms1_int`.
-}
-\details{
-Cost model matches [iaac_grouper()]: per-point sigma
-`mz_i * p0 * max(1, sqrt(Isat / I_i)) / 1e6` (Da). Larger `beta`
-means fewer, wider groups; `beta <= 0` selects the BIC-style default
-`2 * log(n)`. `max_seg > 0` caps the largest allowed group size and
-bounds the worst case at `O(n * max_seg)` while preserving optimality
-among partitions obeying the cap.
+Exact optimal partition of the sorted m/z values: minimises the summed
+per-group cost plus \code{beta} per group. Per-centroid uncertainty is the
+same as in \code{\link[=iaac_grouper]{iaac_grouper()}}. Larger \code{beta} gives fewer, wider groups.
+Uses \code{mz} and \code{intensity}. See \code{\link[=fast_1D_pelt_grouping_cpp]{fast_1D_pelt_grouping_cpp()}}.
 }
 \examples{
 g <- pelt_grouper(beta = -1, p0 = 5, Isat = 5e4)
 g(c(100.000, 100.001, 100.500), intensity = c(1000, 800, 200))
 }
 \seealso{
-[iaac_grouper()], [ppm_upgma()], [abs_upgma()], [validate_grouper()]
+\code{\link[=iaac_grouper]{iaac_grouper()}}, \code{\link[=ppm_upgma]{ppm_upgma()}}, \code{\link[=abs_upgma]{abs_upgma()}}, \code{\link[=validate_grouper]{validate_grouper()}}
 }

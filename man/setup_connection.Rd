@@ -7,15 +7,17 @@
 setup_connection(file_directory)
 }
 \arguments{
-\item{file_directory}{Directory containing `*_pool.parquet` + `*_pointers.parquet`.}
+\item{file_directory}{Directory with the per-sample parquets.}
 }
 \value{
-A live DuckDB connection.
+A DuckDB connection.
 }
 \description{
-Creates two SQL views (`pointers`, `pool`) on a directory of per-sample
-parquets produced by [Ms2PseudoRaw()]. Caller is responsible for
-`DBI::dbDisconnect(con, shutdown = TRUE)` — or pass the connection to
-[clean_pseudo_spectra()] which closes it on exit.
+Opens an in-memory DuckDB with views \code{pointers} and \code{pool} over all
+\verb{*_pointers.parquet} / \verb{*_pool.parquet} files in \code{file_directory}.
+DuckDB spills to \verb{<file_directory>/.duckdb_tmp}, with a fixed
+\code{memory_limit = '128GB'} and \code{threads = 2}. Errors if there are no
+pointer files. Close it with \code{DBI::dbDisconnect(con, shutdown = TRUE)};
+\code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}} does not close a connection you pass in.
 }
 \keyword{internal}

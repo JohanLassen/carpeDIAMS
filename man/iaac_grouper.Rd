@@ -7,24 +7,25 @@
 iaac_grouper(k = 1, p0 = 8, Isat = 1e+05)
 }
 \arguments{
-\item{k}{Numeric. Number of clusters.}
+\item{k}{Merge threshold in sigma. \code{k < 0} gives all singletons,
+\code{Inf} one group.}
 
-\item{p0}{Numeric. Initial parameter for clustering.}
+\item{p0}{Mass accuracy floor (ppm) reached at high intensity.}
 
-\item{Isat}{Numeric. Saturation intensity.}
+\item{Isat}{Intensity at which the uncertainty reaches \code{p0}.}
 }
 \value{
-A grouper closure - see [grouper-contract].
+A grouper closure - see \link{grouper-contract}.
 }
 \description{
-Returns a grouper closure that calls the package's C++ 1-D IAAC
-implementation. Uses `mz` and `intensity`; ignores `target_mz`,
-`scan`, `ms1_int`.
+Agglomerative 1-D clustering where each centroid's m/z uncertainty
+depends on its intensity: \code{sigma_i = mz_i * p0 * max(1, sqrt(Isat / I_i)) / 1e6}. A group is kept only if every merge inside it is within
+\code{k} sigma. Uses \code{mz} and \code{intensity}. See \code{\link[=fast_1D_iaac_grouping_cpp]{fast_1D_iaac_grouping_cpp()}}.
 }
 \examples{
 g <- iaac_grouper(k = 1, p0 = 8, Isat = 1e5)
 g(c(100.0, 100.001, 200.0), intensity = c(1000, 800, 200))
 }
 \seealso{
-[ppm_upgma()], [abs_upgma()], [pelt_grouper()], [validate_grouper()]
+\code{\link[=ppm_upgma]{ppm_upgma()}}, \code{\link[=abs_upgma]{abs_upgma()}}, \code{\link[=pelt_grouper]{pelt_grouper()}}, \code{\link[=validate_grouper]{validate_grouper()}}
 }

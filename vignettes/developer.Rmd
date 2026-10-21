@@ -77,27 +77,25 @@ place to see exactly why.
 
 ## A concrete `p0` sensitivity example
 
-`process_pseudo_spec()` clusters **within each sample first**, then clusters
-the resulting per-sample evidence-weighted points **across samples** — see
-`?grouper-contract` for the full rationale. That second (cross-sample) pass
-has to be wide enough to absorb real between-sample calibration drift, not
-just within-sample scan noise. `p0` (for `iaac_grouper`/`pelt_grouper`) sets
-that width. Too tight, and a single real fragment gets reported as two:
+`process_pseudo_spec()` groups the centroids of all samples in one call, so
+the tolerance has to absorb between-sample calibration drift as well as
+within-sample scan noise. `p0` (for `iaac_grouper`/`pelt_grouper`) sets that
+tolerance. Too tight, and a single real fragment gets reported as two:
 
 ```{r p0-sensitivity}
 for (p0 in c(4, 8, 12)) {
   g <- iaac_grouper(k = 1, p0 = p0, Isat = 1e5)
   s <- process_pseudo_spec(raw, mz_target = mz_target, grouper = g)
-  near67 <- s[fragment_mz > 67.04 & fragment_mz < 67.06]
-  cat(sprintf("p0=%2d: %d group(s) near 67.05 Da (counts: %s)\n",
-              p0, nrow(near67), paste(near67$count, collapse = ", ")))
+  near67 <- s[fragment_mz > 67.048 & fragment_mz < 67.06]
+  cat(sprintf("p0=%2d: %d group(s) near 67.054 Da (samples: %s)\n",
+              p0, nrow(near67), paste(near67$n_samples, collapse = ", ")))
 }
 ```
 
 At `p0 = 4`, the fragment near 67.054 Da is reported as two separate groups
-~10 ppm apart — real between-sample calibration drift for this feature, wider
-than a `p0` sized for within-run precision alone. By `p0 = 12` they merge into
-one well-supported group. This is exactly the kind of thing to check when
+~10 ppm apart, each seen in only part of the samples: between-sample
+calibration drift, wider than a `p0` sized for within-run precision alone.
+From `p0 = 8` they merge into one group seen in all 10 samples. This is exactly the kind of thing to check when
 tuning a grouper for a new instrument or acquisition mode: pick a handful of
 real, multi-sample features and look for this pattern before trusting a `p0`
 value across a whole cohort.
@@ -105,10 +103,8 @@ value across a whole cohort.
 ## Writing your own grouper
 
 A grouper is a factory function returning a closure with a fixed signature —
-see `?grouper-contract`. [`process_pseudo_spec()`] calls the *same* grouper
-instance for both passes (once per-sample, once across-sample); what differs
-between the two calls is which arguments are populated, not which function is
-used.
+see `?grouper-contract`. [`process_pseudo_spec()`] calls it once per feature
+with `mz`, `intensity` and `target_mz`.
 
 ```{r custom-grouper}
 # A trivial custom grouper: fixed ppm tolerance, but reject a merge if the

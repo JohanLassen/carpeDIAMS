@@ -8,48 +8,31 @@
 #'   function(mz, intensity = NULL, target_mz = NULL, scan = NULL, ms1_int = NULL)
 #' }
 #'
-#' Only `mz` is required. Each grouper uses the subset of arguments it
-#' needs and ignores the rest; callers pass whatever is available at
-#' each grouping site. [process_pseudo_spec()] always calls the same
-#' grouper twice, unconditionally, for two different problems:
+#' Only `mz` is required; each grouper ignores the arguments it does not
+#' use. [process_pseudo_spec()] calls the grouper **once per feature**,
+#' on the MS2 centroids of all samples pooled together, passing
+#' `mz` (fragment m/z), `intensity` (centroid intensity) and `target_mz`
+#' (precursor m/z). `scan` and `ms1_int` are not passed there; they exist
+#' for custom callers.
 #'
-#' \itemize{
-#'   \item **Pass 1 (within sample)** — every argument populated,
-#'     scoped `by = sample`. Resolves within-sample scan-to-scan
-#'     m/z jitter.
-#'   \item **Pass 2 (across samples)** — only `mz` and `intensity` are
-#'     populated (`scan`/`ms1_int` are `NULL`, `intensity` is a
-#'     per-sample sum), over one collapsed, evidence-weighted point per
-#'     `(sample, pass-1 group)`. Resolves between-sample calibration
-#'     drift — a different, larger-scale effect pass 1 never attempts to
-#'     address, since it is scoped to one sample at a time.
-#' }
+#' Because samples are pooled, the tolerance has to cover between-sample
+#' calibration drift as well as within-sample scatter.
 #'
-#' Because pass 2 solves a problem pass 1 structurally never saw, rather
-#' than re-litigating pass 1's own decision on a lossy summary of the
-#' *same* population, any grouper is safe to use in either slot — there
-#' is no data-independent-tolerance restriction here. One nuance for the
-#' model-based groupers ([iaac_grouper()], [pelt_grouper()]): their
-#' pass-2 result is optimal *for the deliberately-coarsened per-sample
-#' representation pass 2 is given*, not a claim that it recovers some
-#' ground truth finer-grained input would have found.
-#'
-#' A grouper must return an integer vector of the same length as `mz`
-#' with no more unique values than `unique(mz)`; use [validate_grouper()]
-#' to check a custom implementation.
+#' A grouper returns an integer vector, one group id per element of
+#' `mz`, with no more distinct ids than distinct `mz` values. Check a
+#' custom grouper with [validate_grouper()].
 #'
 #' @name grouper-contract
-#' @keywords internal
 NULL
 
 
 #' ppm-based UPGMA grouper (the package default)
 #'
-#' Returns a grouper closure that calls the package's C++ 1-D UPGMA
-#' implementation with `maxDiff = 1e-6 * target_mz * ppm`.
-#' Uses `mz` and `target_mz`; ignores `intensity`, `scan`, `ms1_int`.
+#' 1-D UPGMA on the sorted m/z values, cut so that no group is wider
+#' (max m/z − min m/z) than `ppm` of the precursor m/z. Uses `mz` and
+#' `target_mz`.
 #'
-#' @param ppm Numeric. Tolerance in parts per million.
+#' @param ppm Maximum group width, in ppm of `target_mz`.
 #' @return A grouper closure - see [grouper-contract].
 #' @seealso [abs_upgma()], [iaac_grouper()], [pelt_grouper()], [validate_grouper()]
 #' @export
@@ -67,13 +50,15 @@ ppm_upgma <- function(ppm = 30) {
 
 #' Intensity-adaptive agglomerative clustering grouper
 #'
-#' Returns a grouper closure that calls the package's C++ 1-D IAAC
-#' implementation. Uses `mz` and `intensity`; ignores `target_mz`,
-#' `scan`, `ms1_int`.
+#' Agglomerative 1-D clustering where each centroid's m/z uncertainty
+#' depends on its intensity: `sigma_i = mz_i * p0 * max(1, sqrt(Isat /
+#' I_i)) / 1e6`. A group is kept only if every merge inside it is within
+#' `k` sigma. Uses `mz` and `intensity`. See [fast_1D_iaac_grouping_cpp()].
 #'
-#' @param k Numeric. Number of clusters.
-#' @param p0 Numeric. Initial parameter for clustering.
-#' @param Isat Numeric. Saturation intensity.
+#' @param k Merge threshold in sigma. `k < 0` gives all singletons,
+#'   `Inf` one group.
+#' @param p0 Mass accuracy floor (ppm) reached at high intensity.
+#' @param Isat Intensity at which the uncertainty reaches `p0`.
 #' @return A grouper closure - see [grouper-contract].
 #' @seealso [ppm_upgma()], [abs_upgma()], [pelt_grouper()], [validate_grouper()]
 #' @export
@@ -92,25 +77,16 @@ iaac_grouper <- function(k = 1, p0 = 8, Isat = 1e5) {
 
 #' PELT (penalized optimal partitioning) grouper
 #'
-#' Returns a grouper closure that calls the package's C++ 1-D PELT
-#' implementation. Unlike the greedy UPGMA / IAAC variants, PELT
-#' globally minimises the total per-segment shot-noise cost plus a
-#' `beta`-weighted segment count — the exact optimum over 1-D
-#' partitions. Uses `mz` and `intensity`; ignores `target_mz`, `scan`,
-#' `ms1_int`.
+#' Exact optimal partition of the sorted m/z values: minimises the summed
+#' per-group cost plus `beta` per group. Per-centroid uncertainty is the
+#' same as in [iaac_grouper()]. Larger `beta` gives fewer, wider groups.
+#' Uses `mz` and `intensity`. See [fast_1D_pelt_grouping_cpp()].
 #'
-#' Cost model matches [iaac_grouper()]: per-point sigma
-#' `mz_i * p0 * max(1, sqrt(Isat / I_i)) / 1e6` (Da). Larger `beta`
-#' means fewer, wider groups; `beta <= 0` selects the BIC-style default
-#' `2 * log(n)`. `max_seg > 0` caps the largest allowed group size and
-#' bounds the worst case at `O(n * max_seg)` while preserving optimality
-#' among partitions obeying the cap.
-#'
-#' @param beta Numeric. Penalty per additional segment; `<= 0` picks
-#'   `2 * log(n)`.
-#' @param p0 Numeric. Floor mass accuracy in ppm.
-#' @param Isat Numeric. Intensity at which per-point precision plateaus at `p0`.
-#' @param max_seg Integer. Maximum group size; `0` = unlimited.
+#' @param beta Penalty per group; `<= 0` uses `2 * log(n)`.
+#' @param p0 Mass accuracy floor (ppm) reached at high intensity.
+#' @param Isat Intensity at which the uncertainty reaches `p0`.
+#' @param max_seg Maximum centroids per group (`0` = no limit). Bounds
+#'   run time at `O(n * max_seg)`; the result is optimal under the cap.
 #' @return A grouper closure - see [grouper-contract].
 #' @seealso [iaac_grouper()], [ppm_upgma()], [abs_upgma()], [validate_grouper()]
 #' @export
@@ -130,10 +106,10 @@ pelt_grouper <- function(beta = -1.0, p0 = 5.0, Isat = 5e4, max_seg = 0L) {
 
 #' Absolute-tolerance UPGMA grouper
 #'
-#' Same backend as [ppm_upgma()] but with a fixed `max_diff` in Da.
+#' As [ppm_upgma()], but the maximum group width is a fixed value in Da.
 #' Uses only `mz`.
 #'
-#' @param max_diff Numeric. Absolute m/z tolerance in Da.
+#' @param max_diff Maximum group width (max m/z − min m/z) in Da.
 #' @return A grouper closure - see [grouper-contract].
 #' @export
 #' @examples
@@ -149,12 +125,11 @@ abs_upgma <- function(max_diff = 0.005) {
 
 #' Fixed-width binning grouper
 #'
-#' Assigns each m/z to a bin of width `bin_width` (Da) - fast,
-#' deterministic. Bin-boundary values straddling a boundary get split
-#' even when closer to each other than `bin_width`; for tolerant
-#' grouping use [ppm_upgma()] / [abs_upgma()] instead. Uses only `mz`.
+#' Group id is `floor(mz / bin_width) + 1`. Fast, but two close values
+#' on either side of a bin edge end up in different groups. Uses only
+#' `mz`.
 #'
-#' @param bin_width Numeric. Bin width in Da (typical: 0.01, 0.05, 0.1).
+#' @param bin_width Bin width in Da.
 #' @return A grouper closure - see [grouper-contract].
 #' @export
 #' @examples
@@ -170,17 +145,15 @@ bin_grouper <- function(bin_width = 0.01) {
 
 #' Sanity-check a custom grouper against the contract
 #'
-#' Probes a grouper with small example vectors and asserts the return
-#' has one integer per input and no more groups than distinct m/z
-#' values. Use once when wiring up a custom grouper; do not call inside
-#' hot loops.
+#' Calls `grouper` on a small synthetic input and errors unless it
+#' returns one id per input value and no more groups than distinct m/z
+#' values. It does not check the type of the ids.
 #'
 #' @param grouper A function conforming to [grouper-contract].
 #' @param mz_example Numeric vector to probe with.
-#' @param intensity,target_mz,scan,ms1_int Probe values for groupers
-#'   that require them; defaults are sensible synthetic inputs.
-#' @return Invisibly `TRUE` when valid; throws otherwise.
-#' @keywords internal
+#' @param intensity,target_mz,scan,ms1_int Probe values passed to
+#'   `grouper`.
+#' @return Invisibly `TRUE`; errors otherwise.
 #' @export
 validate_grouper <- function(grouper,
                              mz_example = c(100.000, 100.001, 100.500, 200.000),

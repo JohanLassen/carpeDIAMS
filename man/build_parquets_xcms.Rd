@@ -9,35 +9,35 @@ build_parquets_xcms(
   fd,
   out_dir,
   sample_id,
-  top_n = 10L,
+  qualifying_features,
   ppm = NULL,
   rt_buffer = 0
 )
 }
 \arguments{
-\item{mssubset}{Output of [subset_samples_xcms()].}
+\item{mssubset}{Output of \code{\link[=subset_samples_xcms]{subset_samples_xcms()}}.}
 
-\item{fd}{`featureDefinitions()` table.}
+\item{fd}{\code{featureDefinitions()} table.}
 
-\item{out_dir}{Directory for the two parquets.}
+\item{out_dir}{Output directory (created if missing).}
 
-\item{sample_id}{Integer. 1-based index into the subsetted msobject.}
+\item{sample_id}{Index into \code{fileNames(mssubset$msobject)}.}
 
-\item{top_n}{Integer. Keep the top-N samples per feature (by assay
-intensity) — restricts which features get built for this sample.}
+\item{qualifying_features}{Feature ids to build for this sample.}
 
-\item{ppm}{Numeric or `NULL`. Fragment tolerance in ppm; when set,
-`maxDiff` is derived from `max(scan_info$mz) * ppm * 1e-6`.
-`NULL` keeps the legacy 0.005 Da tolerance.}
+\item{ppm}{MS1 tolerance in ppm, converted to Da at the largest
+feature m/z in this sample. \code{NULL} uses 0.005 Da.}
 
-\item{rt_buffer}{Numeric. Seconds added to each side of every peak's
-RT window before scan extraction (compensates for alignment jitter).}
+\item{rt_buffer}{Seconds added to both sides of each peak's RT window.}
 }
 \value{
-Invisibly `NULL`. Writes two parquets to `out_dir`.
+\code{NULL}.
 }
 \description{
-Stage-01 orchestrator: takes the output of [subset_samples_xcms()] and
-calls [Ms2PseudoRaw()] for one `sample_id`.
+The work behind \code{process_xcms(stage = "sample")}: looks up the
+sample's peaks for \code{qualifying_features}, widens their RT windows by
+\code{rt_buffer}, maps them to scans with \code{\link[=extractScanInfo]{extractScanInfo()}}, and calls
+\code{\link[=Ms2PseudoRaw]{Ms2PseudoRaw()}}. Writes nothing if the sample has no qualifying
+features or no matching scans.
 }
 \keyword{internal}

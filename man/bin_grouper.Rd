@@ -7,16 +7,15 @@
 bin_grouper(bin_width = 0.01)
 }
 \arguments{
-\item{bin_width}{Numeric. Bin width in Da (typical: 0.01, 0.05, 0.1).}
+\item{bin_width}{Bin width in Da.}
 }
 \value{
-A grouper closure - see [grouper-contract].
+A grouper closure - see \link{grouper-contract}.
 }
 \description{
-Assigns each m/z to a bin of width `bin_width` (Da) - fast,
-deterministic. Bin-boundary values straddling a boundary get split
-even when closer to each other than `bin_width`; for tolerant
-grouping use [ppm_upgma()] / [abs_upgma()] instead. Uses only `mz`.
+Group id is \code{floor(mz / bin_width) + 1}. Fast, but two close values
+on either side of a bin edge end up in different groups. Uses only
+\code{mz}.
 }
 \examples{
 g <- bin_grouper(bin_width = 0.01)

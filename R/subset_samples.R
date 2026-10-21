@@ -1,24 +1,20 @@
-#' Subset an XCMSnExp to a representative set of samples (apricot MaxCoverage)
+#' Pick representative samples with apricot MaxCoverage
 #'
-#' Picks `subset_size` files from `msobject` that collectively cover the
-#' largest number of features present above the per-feature `q_prob`
-#' quantile, using apricot's MaxCoverageSelection via reticulate. With
-#' `subsample = FALSE`, returns all samples unchanged (still wrapped in
-#' the same list shape downstream expects). The full `chromPeaks` table
-#' is returned alongside the msobject because downstream
-#' `getBackendPeaks()` needs the original peak-row indexing (`peakidx`
-#' from the parent featureDefinitions).
+#' A sample "covers" a feature when its intensity is at or above that
+#' feature's `q_prob` quantile across samples (missing values count as
+#' 0). apricot's `MaxCoverageSelection` then picks the `subset_size`
+#' samples that together cover the most features. Needs Python with
+#' `apricot-select` and `numpy` (via reticulate).
 #'
-#' @param msobject An `XCMSnExp`.
-#' @param msassay  Numeric matrix, samples (rows) x features (cols).
-#'   `rownames(msassay)` must match `basename(xcms::fileNames(msobject))`.
-#' @param subset_size Integer. Number of samples to keep. Ignored when
-#'   `subsample = FALSE`.
-#' @param q_prob Numeric in (0, 1). Per-feature presence-threshold
-#'   quantile. Ignored when `subsample = FALSE`.
-#' @param subsample Logical. When `FALSE`, skip apricot and return all
-#'   samples as-is; Python/apricot are not touched.
-#' @return A list with elements `msobject`, `assay`, `peaks`.
+#' @param msobject An `XcmsExperiment`/`XCMSnExp`.
+#' @param msassay Samples × features intensity matrix;
+#'   `rownames(msassay)` must be `basename(xcms::fileNames(msobject))`.
+#' @param subset_size Number of samples to keep.
+#' @param q_prob Per-feature quantile that defines "covered".
+#' @param subsample If `FALSE`, return every sample and skip Python.
+#' @return List with `msobject` (subsetted), `assay` (selected rows),
+#'   `peaks` and `all_files` (both from the **unsubsetted** object, so
+#'   `peakidx` and sample indices stay valid).
 #' @keywords internal
 #' @export
 subset_samples_xcms <- function(
@@ -32,9 +28,17 @@ subset_samples_xcms <- function(
         return(list(
             msobject = msobject,
             assay    = msassay,
-            peaks    = xcms::chromPeaks(msobject)
+            peaks    = xcms::chromPeaks(msobject),
+            all_files = xcms::fileNames(msobject)
         ))
     }
+
+    if (!reticulate::py_module_available("apricot"))
+        cli::cli_abort(c(
+            "Python module {.pkg apricot} is not available to reticulate.",
+            "i" = "reticulate is using {.file {reticulate::py_config()$python}}.",
+            "i" = "The container sets RETICULATE_PYTHON to its own Python with apricot-select + numpy; a host run needs RETICULATE_PYTHON pointing at one."
+        ))
 
     msassay[is.na(msassay)] <- 0
     thresholds <- apply(msassay, 2, quantile, probs = q_prob)
@@ -48,6 +52,6 @@ subset_samples_xcms <- function(
     peaks <- xcms::chromPeaks(msobject)
 
     object <- msobject[basename(xcms::fileNames(msobject)) %in% rownames(assay_sub)]
-    return(list("msobject" = object, "assay" = assay_sub, "peaks" = peaks))
+    return(list("msobject" = object, "assay" = assay_sub, "peaks" = peaks, all_files = xcms::fileNames(msobject)))
 }
 

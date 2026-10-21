@@ -7,20 +7,26 @@
 extractScanInfo(feature_peaks, filenames, spectra_df, target_list = FALSE)
 }
 \arguments{
-\item{feature_peaks}{Output of [getBackendPeaks()].}
+\item{feature_peaks}{Output of \code{\link[=getBackendPeaks]{getBackendPeaks()}}.}
 
-\item{filenames}{Character vector in `sample` order — typically
-`xcms::fileNames(msobject)`.}
+\item{filenames}{File paths indexed by the peaks' \code{sample} column,
+matching \code{spectra_df$dataOrigin}.}
 
-\item{spectra_df}{Backend metadata, e.g.
-`Spectra::spectra(msobject)@backend@spectraData@listData |> dplyr::bind_cols()`.}
+\item{spectra_df}{Per-scan metadata with \code{dataOrigin},
+\code{acquisitionNum} and \code{rtime}, e.g.
+\code{as.data.frame(Spectra::spectraData(sps))}.}
+
+\item{target_list}{If \code{TRUE}, keep every peak per (feature, sample)
+instead of only the most intense.}
 }
 \value{
-Tibble: `sample, filename, mz, feature, scan_indices, apex_scan_index, n_scans`.
+Tibble with \verb{sample, filename, mz, feature, scan_indices}
+(list), \verb{apex_scan_index, n_scans}.
 }
 \description{
-Joins per-feature chromPeaks (from [getBackendPeaks()]) to the Spectra
-backend's per-scan metadata, producing one row per (feature, sample) with
-the scan indices inside the peak RT window plus the apex scan.
+For each (feature, sample), takes the most intense peak (largest
+\code{into}) and lists the scans whose retention time lies in
+\verb{[rtmin, rtmax]}, plus the scan closest to the peak \code{rt}. Uses
+\code{rtime_adjusted} when present, else \code{rtime}.
 }
 \keyword{internal}

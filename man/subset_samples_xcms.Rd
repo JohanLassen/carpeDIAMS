@@ -2,7 +2,7 @@
 % Please edit documentation in R/subset_samples.R
 \name{subset_samples_xcms}
 \alias{subset_samples_xcms}
-\title{Subset an XCMSnExp to a representative set of samples (apricot MaxCoverage)}
+\title{Pick representative samples with apricot MaxCoverage}
 \usage{
 subset_samples_xcms(
   msobject,
@@ -13,31 +13,27 @@ subset_samples_xcms(
 )
 }
 \arguments{
-\item{msobject}{An `XCMSnExp`.}
+\item{msobject}{An \code{XcmsExperiment}/\code{XCMSnExp}.}
 
-\item{msassay}{Numeric matrix, samples (rows) x features (cols).
-`rownames(msassay)` must match `basename(xcms::fileNames(msobject))`.}
+\item{msassay}{Samples × features intensity matrix;
+\code{rownames(msassay)} must be \code{basename(xcms::fileNames(msobject))}.}
 
-\item{subset_size}{Integer. Number of samples to keep. Ignored when
-`subsample = FALSE`.}
+\item{subset_size}{Number of samples to keep.}
 
-\item{q_prob}{Numeric in (0, 1). Per-feature presence-threshold
-quantile. Ignored when `subsample = FALSE`.}
+\item{q_prob}{Per-feature quantile that defines "covered".}
 
-\item{subsample}{Logical. When `FALSE`, skip apricot and return all
-samples as-is; Python/apricot are not touched.}
+\item{subsample}{If \code{FALSE}, return every sample and skip Python.}
 }
 \value{
-A list with elements `msobject`, `assay`, `peaks`.
+List with \code{msobject} (subsetted), \code{assay} (selected rows),
+\code{peaks} and \code{all_files} (both from the \strong{unsubsetted} object, so
+\code{peakidx} and sample indices stay valid).
 }
 \description{
-Picks `subset_size` files from `msobject` that collectively cover the
-largest number of features present above the per-feature `q_prob`
-quantile, using apricot's MaxCoverageSelection via reticulate. With
-`subsample = FALSE`, returns all samples unchanged (still wrapped in
-the same list shape downstream expects). The full `chromPeaks` table
-is returned alongside the msobject because downstream
-`getBackendPeaks()` needs the original peak-row indexing (`peakidx`
-from the parent featureDefinitions).
+A sample "covers" a feature when its intensity is at or above that
+feature's \code{q_prob} quantile across samples (missing values count as
+0). apricot's \code{MaxCoverageSelection} then picks the \code{subset_size}
+samples that together cover the most features. Needs Python with
+\code{apricot-select} and \code{numpy} (via reticulate).
 }
 \keyword{internal}

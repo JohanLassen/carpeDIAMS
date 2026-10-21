@@ -14,24 +14,34 @@ Ms2PseudoRaw(
 )
 }
 \arguments{
-\item{single_sample}{Tibble from [extractScanInfo()] restricted to one file.}
+\item{single_sample}{One file's rows from \code{\link[=extractScanInfo]{extractScanInfo()}} (or the
+same columns built from a target list).}
 
-\item{spectra_object}{Full `Spectra` object (`Spectra::spectra(msobject)`).}
+\item{spectra_object}{\code{Spectra} object containing that file.}
 
-\item{output_dir}{Directory to write the two parquets.}
+\item{output_dir}{Output directory.}
 
-\item{maxDiff}{Numeric. m/z tolerance for the MS1 ↔ precursor foverlaps join.}
+\item{maxDiff}{MS1 m/z tolerance in Da.}
 
-\item{buffer}{Integer. Scan-window slack on each side of the feature's range.}
+\item{buffer}{Extra scans on each side.}
 
-\item{return_spectra}{Logical. If `TRUE`, also return pool + pointers as tibbles.}
+\item{return_spectra}{If \code{TRUE}, also return the two tables.}
 }
 \value{
-`NULL` (or `list(pool, pointer)` if `return_spectra = TRUE`).
+\code{NULL}, or \code{list(pool, pointer)} when \code{return_spectra = TRUE}.
+Returns \code{NULL} without writing if no scans are in range.
 }
 \description{
-Writes `sample_<id>_pool.parquet` (all MS2 fragments in the file) and
-`sample_<id>_pointers.parquet` (one row per feature x MS1 scan, with
-summed MS1 intensity). Together these feed [clean_pseudo_spectra()].
+Reads the scans of one file between the lowest and highest scan in
+\code{single_sample} (± \code{buffer}) and writes two parquets to \code{output_dir}:
+}
+\details{
+\itemize{
+\item \verb{sample_<id>_pool.parquet}: every MS2 centroid in that scan range
+(\verb{sample, scan, rt, mz, int}).
+\item \verb{sample_<id>_pointers.parquet}: for each feature and each MS1 scan
+within its scan range ± \code{buffer}, the summed intensity of MS1
+centroids within \code{maxDiff} Da of the precursor (\verb{feature, scan, mz_target, apex_scan, ms1_int, mz, rt, sample}).
+}
 }
 \keyword{internal}

@@ -16,25 +16,20 @@ apex_correlation_filtering(
 
 \item{fdr_thresh}{Maximum BH-adjusted FDR to keep.}
 
-\item{max_apex_shift_med}{Reject if `abs(median(apex_shift))` across
-samples exceeds this (in scans).}
+\item{max_apex_shift_med}{Maximum \code{abs(apex_shift_med)}, in scans.}
 
-\item{max_apex_shift_iqr}{Reject if `IQR(apex_shift)` across samples
-exceeds this (in scans).}
+\item{max_apex_shift_iqr}{Maximum \code{apex_shift_iqr}, in scans.}
 }
 \value{
-A filter closure — see [filter-contract].
+A filter closure — see \link{filter-contract}.
 }
 \description{
-As [correlation_filtering()], additionally requiring
-`abs(apex_shift_med) <= max_apex_shift_med` and
-`apex_shift_iqr <= max_apex_shift_iqr`. Requires the two apex-shift
-columns on its input — pair with [apex_correlation_statistics()]
-upstream; a helpful error is raised if those columns are missing.
-}
-\details{
-Conforms to [filter-contract].
+As \code{\link[=correlation_filtering]{correlation_filtering()}}, and also requires
+\code{abs(apex_shift_med) <= max_apex_shift_med} and
+\code{apex_shift_iqr <= max_apex_shift_iqr}. Errors if those columns are
+missing, i.e. if \code{\link[=apex_correlation_statistics]{apex_correlation_statistics()}} was not used.
+Conforms to \link{filter-contract}.
 }
 \seealso{
-[correlation_filtering()], [apex_correlation_statistics()]
+\code{\link[=correlation_filtering]{correlation_filtering()}}, \code{\link[=apex_correlation_statistics]{apex_correlation_statistics()}}
 }

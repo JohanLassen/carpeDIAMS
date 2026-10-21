@@ -5,17 +5,15 @@
 \title{Filter contract}
 \description{
 All filter closures in this package share one signature so they are
-drop-in replaceable in [clean_pseudo_spectra()]:
+drop-in replaceable in \code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}}:
 }
 \details{
 \preformatted{
   function(stats) -> row-subset of stats
 }
 
-`stats` is the per-group summary produced by a [stats-contract] closure.
-A filter returns a row-subset of that summary (same columns) — no
-aggregation, no new statistics.
-
-Return an empty data.table (same columns) when nothing survives.
+\code{stats} is the per-group table from a \link{stats-contract} closure. The
+filter returns the rows to keep, with the same columns. Zero rows (or
+\code{NULL}) means the feature gets a \code{DeconvERROR:NoAssociatedFragments}
+block in the MGF.
 }
-\keyword{internal}

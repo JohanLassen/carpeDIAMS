@@ -5,40 +5,34 @@
 \title{Statistics contract}
 \description{
 All group-statistics closures in this package share one signature so they
-are drop-in replaceable in [process_pseudo_spec()] and
-[clean_pseudo_spectra()]:
+are drop-in replaceable in \code{\link[=process_pseudo_spec]{process_pseudo_spec()}} and
+\code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}}:
 }
 \details{
 \preformatted{
   function(dt) -> per-group summary data.table
 }
 
-`dt` is the raw per-feature data.table produced by
-[batch_get_feature_data()] (columns `sample, feature, mz, fragment_mz,
-int, ms1_scan, ms2_scan, ms1_int`) after the apex window has been
-applied, the active grouper has added a `group` column, and
-[process_pseudo_spec()] has added `group_mz` — the consensus m/z, one
-constant value per group.
+\code{dt} holds one feature's rows from \code{\link[=batch_get_feature_data]{batch_get_feature_data()}} (one row
+per MS1 scan × following MS2 centroid), after \code{\link[=process_pseudo_spec]{process_pseudo_spec()}}
+has dropped rows without a fragment, applied the apex window, and
+added \code{group} (from the grouper) and \code{group_mz} (the consensus m/z,
+constant within a group).
 
-A statistics closure must **carry `group_mz` through as `fragment_mz`**
-rather than deriving m/z itself; m/z is settled before statistics run.
-It aggregates and returns **one row per group** with the canonical
-schema
+The closure returns one row per group with at least
 
 \preformatted{
   group, fragment_mz, mz, int, ms1_int,
   correlation, p_value, fdr, count, n_samples
 }
 
-plus any extra per-group columns it needs (e.g. `apex_shift_med`,
-`apex_shift_iqr` from [apex_correlation_statistics()]). No thresholding
-is applied — that is the job of a [filter-contract] closure downstream.
+where \code{fragment_mz} is \code{group_mz} carried through. Extra columns are
+allowed (e.g. \code{apex_shift_med}, \code{apex_shift_iqr}). It should not
+threshold; that is the \link{filter-contract} closure's job.
+\code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}} reads \code{fragment_mz}, \code{group}, \code{int},
+\code{n_samples}, \code{count}, \code{correlation}, \code{p_value} and \code{fdr} from the
+filtered result.
 
-It should attach the per-`(group, sample, ms1_scan)` aggregation as an
-attribute named `"grouped_signal"` so [process_pseudo_spec()] and the
-diagnostic plots can reuse it without recomputing.
-
-Return an empty data.table (same columns) when nothing survives
-`min_count`.
+Optionally attach the \verb{(group, sample, ms1_scan)} aggregate as
+attribute \code{"grouped_signal"}; the diagnostic report plots it.
 }
-\keyword{internal}

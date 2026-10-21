@@ -2,25 +2,22 @@
 % Please edit documentation in R/spectral_filtering.R
 \name{select_pseudo_spec}
 \alias{select_pseudo_spec}
-\title{Legacy per-group thresholder (superseded by [correlation_filtering()])}
+\title{Legacy per-group thresholder (superseded by \code{\link[=correlation_filtering]{correlation_filtering()}})}
 \usage{
 select_pseudo_spec(correlations, cor_thresh = 0.5, fdr_thresh = 0.05)
 }
 \arguments{
-\item{correlations}{Per-group summary from a [stats-contract] closure
-(typically [correlation_statistics()]).}
+\item{correlations}{Per-group summary from a \link{stats-contract} closure
+(typically \code{\link[=correlation_statistics]{correlation_statistics()}}).}
 
 \item{cor_thresh}{Numeric. Minimum correlation to keep.}
 
 \item{fdr_thresh}{Numeric. Maximum FDR to keep.}
 }
 \value{
-A `data.table` (possibly empty).
+A \code{data.table} (possibly empty).
 }
 \description{
-Kept as an internal convenience for old scripts. New code should use
-`correlation_filtering(cor_thresh, fdr_thresh)` — a [filter-contract]
-closure that composes with [process_pseudo_spec()] via
-[clean_pseudo_spectra()]'s `filter_fn` argument.
+Not exported. Use \code{correlation_filtering(cor_thresh, fdr_thresh)}.
 }
 \keyword{internal}

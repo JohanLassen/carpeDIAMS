@@ -2,7 +2,7 @@
 % Please edit documentation in R/api.R
 \name{process_targetlist}
 \alias{process_targetlist}
-\title{Build pseudo-spectra MGF from mzML file(s) against a target list}
+\title{Build a pseudo-spectra MGF from mzML file(s) and a target list}
 \usage{
 process_targetlist(
   input,
@@ -27,70 +27,77 @@ process_targetlist(
 )
 }
 \arguments{
-\item{input}{Single mzML path, a directory of mzMLs, or a character
-vector of mzML paths.}
+\item{input}{One mzML path, a directory of mzMLs (non-recursive), or
+a character vector of mzML paths. Only read by \code{prepare}.}
 
-\item{output}{MGF path. Required for `stage = "all"` or `"finalize"`.}
+\item{output}{MGF path. Required for \code{"all"} and \code{"finalize"}.}
 
-\item{targetlist}{Path to CSV with `mz` and `rt` columns (optional
-`feature`), or a data.frame with the same shape.}
+\item{targetlist}{CSV path or data.frame (see Details). Required for
+\code{"all"} and \code{"prepare"}.}
 
-\item{tmp_dir}{Working directory. `NULL` only for `stage = "all"`
-(creates + cleans a `tempfile`); required otherwise.}
+\item{tmp_dir}{Working directory. \code{NULL} is only allowed for
+\code{stage = "all"}, which then uses a \code{tempfile()} deleted on exit.}
 
-\item{stage}{One of `"all"`, `"prepare"`, `"sample"`, `"filter"`,
-`"finalize"`. `"filter"` is the batched scale-out path;
-`"finalize"` auto-aggregates batch parquets if present.}
+\item{stage}{One of \code{"all"}, \code{"prepare"}, \code{"sample"}, \code{"filter"},
+\code{"finalize"}.}
 
-\item{sample_idx, sample_file}{Sample addressing for
-`stage = "sample"`; idx is 1-based into `manifest`.}
+\item{sample_idx}{Row of \code{manifest.csv} to process at \code{"sample"}.
+Takes precedence over \code{sample_file}.}
 
-\item{ppm}{Fragment/precursor tolerance in ppm.}
+\item{sample_file}{mzML basename to process at \code{"sample"}; looked up
+in \code{manifest.csv}.}
 
-\item{rt_width}{Total width (seconds) of the RT window around each
-target's `rt` when extracting scans.}
+\item{ppm}{Used twice: at \code{sample}, the MS1 m/z tolerance for the
+precursor trace (converted to Da at the largest target m/z); and
+for the default grouper \code{ppm_upgma(ppm = ppm)}.}
 
-\item{grouper}{A grouper closure (see [grouper-contract]); `NULL`
-uses `ppm_upgma(ppm = ppm)`.}
+\item{rt_width}{Total width (seconds) of the extraction window,
+centred on each target's \code{rt}.}
 
-\item{group_statistics_fn}{A statistics closure (see [stats-contract]);
-`NULL` uses `correlation_statistics(min_count = min_count)`.}
+\item{grouper}{A grouper closure (see \link{grouper-contract}); \code{NULL}
+uses \code{ppm_upgma(ppm = ppm)}.}
 
-\item{filter_fn}{A filter closure (see [filter-contract]); `NULL`
-uses `correlation_filtering(cor_thresh, fdr_thresh)`.}
+\item{group_statistics_fn}{A statistics closure (see \link{stats-contract});
+\code{NULL} uses \code{correlation_statistics(min_count = min_count)}.}
 
-\item{fdr_thresh, cor_thresh, min_count}{Consumed by the default
-`filter_fn` / `group_statistics_fn`; ignored when the caller
-supplies its own. Permissive defaults.}
+\item{filter_fn}{A filter closure (see \link{filter-contract}); \code{NULL}
+uses \code{correlation_filtering(cor_thresh, fdr_thresh)}.}
 
-\item{batch_idx, n_batches}{For `stage = "filter"`: split `targets`
-into `n_batches` contiguous chunks and process chunk `batch_idx`
-(1-based). One `filter` DAG job per batch; `finalize` unions them.}
+\item{fdr_thresh, cor_thresh, min_count}{Only used to build the default
+\code{filter_fn} / \code{group_statistics_fn}.}
 
-\item{ion_mode}{`"POSITIVE"` or `"NEGATIVE"`.}
+\item{batch_idx, n_batches}{For \code{"filter"}: process slice \code{batch_idx}
+(1-based) of \code{n_batches}. A slice past the last feature writes an
+empty parquet.}
 
-\item{...}{Forwarded to [clean_pseudo_spectra()].}
+\item{ion_mode}{\code{"POSITIVE"} or \code{"NEGATIVE"}, written as \verb{IONMODE=}.}
+
+\item{...}{Forwarded to \code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}} at \code{"filter"} and
+\code{"finalize"}. \code{require_rt} is always \code{TRUE} on this route.}
 }
 \value{
-Invisibly the `tmp_dir` path.
+Invisibly \code{tmp_dir}.
 }
 \description{
-User-facing entry point for the targeted workflow: given a CSV of
-`mz`/`rt` targets and one-or-many mzML files, produce an MGF of
-pseudo-spectra. Same `stage`/`sample_idx` shape as [process_xcms()]
-so a DAG can parallelize per-sample; interactive users leave
-`stage = "all"`.
+Targeted route: no peak detection. Every target is extracted from
+every file, in a fixed RT window around its \code{rt}. Same stages and
+\code{tmp_dir} layout as \code{\link[=process_xcms]{process_xcms()}}, except that \code{prepare} writes
+only \code{manifest.csv} and \code{fd.rds} (no subsampling, no top-N ranking).
 }
 \details{
-# On-disk contract (identical to [process_xcms()])
-
+Target-list handling:
 \itemize{
-  \item `<tmp_dir>/manifest.csv` — `sample_idx,filename`.
-  \item `<tmp_dir>/fd.rds` — feature-definition frame derived from
-    the target list (`feature_id`, `mzmed`, `rtmed`).
-  \item `<tmp_dir>/sample_<idx>_pool.parquet`,
-        `<tmp_dir>/sample_<idx>_pointers.parquet`.
+\item Needs \code{mz} and \code{rt} columns; \code{feature} is optional (ids
+\code{FT01}, \code{FT02}, … are generated when missing).
+\item If the largest \code{rt} is below 60 it is taken as minutes and
+converted to seconds.
+\item Rows with missing \code{mz} or \code{rt} are kept and reported as
+\code{DeconvERROR:MissingTargetInfo} in the MGF.
 }
+
+At \code{sample}, files with no MS2 labels get MS levels by scan-index
+parity (as in \code{\link[=process_mzml]{process_mzml()}}). Samples where no target falls within
+the window write no parquets; \code{stage = "all"} reports them.
 }
 \seealso{
 Other api:

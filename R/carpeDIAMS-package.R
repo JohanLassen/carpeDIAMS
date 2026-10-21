@@ -7,34 +7,39 @@
 #' @keywords internal
 #' @useDynLib carpeDIAMS, .registration = TRUE
 #' @importFrom Rcpp sourceCpp
-#' @importFrom data.table data.table := .I .SD setDT setkey
+#' @importFrom data.table data.table := .I .SD setDT setkey as.data.table rbindlist
+#' @importFrom stats quantile
 #' @import arrow
 #' @import cli
 #' @import DBI
 #' @import dplyr
 #' @import duckdb
-#' @import MsExperiment
 #' @import purrr
 #' @import readr
 #' @import reticulate
-#' @import S4Vectors
-#' @import Spectra
 #' @import tibble
 #' @import tidyr
-#' @import xcms
+#' @importFrom Spectra Spectra MsBackendMzR spectraData dataOrigin msLevel peaksData filterAcquisitionNum filterDataOrigin acquisitionNum
+#' @importFrom MsExperiment MsExperiment linkSampleData sampleData<- spectra spectra<-
+#' @importFrom xcms CentWaveParam findChromPeaks chromPeaks chromPeakData fileNames
+#' @importFrom S4Vectors DataFrame
 "_PACKAGE"
 
 utils::globalVariables(c(
+  # data.table special symbols (., .N, .GRP) - not real objects, just NSE
+  ".", ".N", ".GRP",
   # data.table NSE
   "global_idx", "sample", "feature", "scan", "int", "mz", "mz_target",
   "mz_lo", "mz_hi", "scan_lo", "scan_hi", "apex_scan", "mz_start", "mz_end",
   "mslevel", "scan_indices", "apex_scan_index",
   # dplyr/tidyr NSE
-  "feature_id", "name", "value", "dataOrigin", "rtmin", "rtmax", "rt", "into",
+  "feature_id", "name", "value", "dataOrigin", "rtmin", "rtmax", "rt", "into", "rtime",
+  "filename", "frag_mz", "..peak_cols",
    # spectral_filtering
   "apex", "group", "group_first", "group_mz", "intensity", "i.group",
   "fragment_mz", "ms1_int", "ms1_scan", "ms2_scan",
   "fdr", "p_value", "correlation", "count", "n_samples",
+  "lo", "hi", "V1",
    # filtering
   "apex_shift", "apex_shift_med", "apex_shift_iqr", "m1", "m2"
 ))

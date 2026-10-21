@@ -9,16 +9,20 @@ batch_get_feature_data(feature_ids, con, chunk_size = 500)
 \arguments{
 \item{feature_ids}{Character vector of feature ids.}
 
-\item{con}{A connection from [setup_connection()].}
+\item{con}{A connection from \code{\link[=setup_connection]{setup_connection()}}.}
 
-\item{chunk_size}{Integer. Features per `IN`-clause.}
+\item{chunk_size}{Features per query.}
 }
 \value{
-`data.table` with columns
-  `sample, feature, mz, fragment_mz, int, ms1_scan, ms2_scan, ms1_int`.
+\code{data.table}, one row per (MS1 scan, MS2 centroid):
+\verb{sample, feature, mz} (precursor), \verb{fragment_mz, int, ms1_scan, ms2_scan, ms1_int, apex_scan, ms1_rt, ms2_rt}. \code{apex_scan} is the
+apex found upstream (xcms peak or nearest scan to the target RT);
+the RT columns are \code{NULL}/\code{NA} for parquets written without \code{rt}.
 }
 \description{
-Joins `pointers ⨝ pool` on `(sample, scan + 1)` with the precursor cut
-`m.mz <= p.mz_target + 2`. Chunks the feature list to bound `IN (…)`.
+Pairs each MS1 pointer row with the MS2 centroids of the \strong{next scan}
+(\code{pool.scan = pointers.scan + 1}, same sample), keeping fragments with
+m/z at most precursor + 2. MS1 rows with no matching MS2 centroid are
+kept with \code{NA} fragment columns.
 }
 \keyword{internal}

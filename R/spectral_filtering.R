@@ -1,21 +1,19 @@
 #' Open a DuckDB connection with views over pool/pointer parquets
 #'
-#' Creates two SQL views (`pointers`, `pool`) on a directory of per-sample
-#' parquets produced by [Ms2PseudoRaw()]. Caller is responsible for
-#' `DBI::dbDisconnect(con, shutdown = TRUE)` — or pass the connection to
-#' [clean_pseudo_spectra()] which closes it on exit.
+#' Opens an in-memory DuckDB with views `pointers` and `pool` over all
+#' `*_pointers.parquet` / `*_pool.parquet` files in `file_directory`.
+#' DuckDB spills to `<file_directory>/.duckdb_tmp`, with a fixed
+#' `memory_limit = '128GB'` and `threads = 2`. Errors if there are no
+#' pointer files. Close it with `DBI::dbDisconnect(con, shutdown = TRUE)`;
+#' [clean_pseudo_spectra()] does not close a connection you pass in.
 #'
-#' @param file_directory Directory containing `*_pool.parquet` + `*_pointers.parquet`.
-#' @return A live DuckDB connection.
+#' @param file_directory Directory with the per-sample parquets.
+#' @return A DuckDB connection.
 #' @keywords internal
 #' @export
 setup_connection <- function(file_directory) {
   # Resolve to absolute path — DuckDB may not share R's working directory
   abs_dir <- normalizePath(file_directory, mustWork = TRUE)
-  # Fail with something readable. DuckDB's own message for an empty glob is an
-  # opaque "IO Error: No files found that match the pattern ...", which hides
-  # the real cause: no sample produced pointers (e.g. every target fell outside
-  # the RT window, or the mzML was truncated).
   if (!length(list.files(abs_dir, pattern = "_pointers\\.parquet$")))
     cli::cli_abort(c(
       "No {.file *_pointers.parquet} in {.path {abs_dir}}.",
@@ -28,32 +26,42 @@ setup_connection <- function(file_directory) {
   dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
   con <- DBI::dbConnect(duckdb::duckdb(), config = list(temp_directory = tmp_dir))
   DBI::dbExecute(con, sprintf(
-    "CREATE OR REPLACE VIEW pointers AS SELECT * FROM read_parquet('%s/*_pointers.parquet')", 
+    "CREATE OR REPLACE VIEW pointers AS SELECT * FROM read_parquet('%s/*_pointers.parquet', union_by_name = true)",
     abs_dir
   ))
   DBI::dbExecute(con, sprintf(
-    "CREATE OR REPLACE VIEW pool AS SELECT * FROM read_parquet('%s/*_pool.parquet')", 
+    "CREATE OR REPLACE VIEW pool AS SELECT * FROM read_parquet('%s/*_pool.parquet', union_by_name = true)",
     abs_dir
   ))
+  DBI::dbExecute(con, sprintf("SET temp_directory = '%s'", tmp_dir))
+  DBI::dbExecute(con, "SET memory_limit = '128GB'")   # below the SLURM allocation
+  DBI::dbExecute(con, "SET threads = 2")
   con
 }
 
 #' Fetch raw MS2 + MS1 rows for a vector of features from DuckDB
 #'
-#' Joins `pointers ⨝ pool` on `(sample, scan + 1)` with the precursor cut
-#' `m.mz <= p.mz_target + 2`. Chunks the feature list to bound `IN (…)`.
+#' Pairs each MS1 pointer row with the MS2 centroids of the **next scan**
+#' (`pool.scan = pointers.scan + 1`, same sample), keeping fragments with
+#' m/z at most precursor + 2. MS1 rows with no matching MS2 centroid are
+#' kept with `NA` fragment columns.
 #'
 #' @param feature_ids Character vector of feature ids.
 #' @param con A connection from [setup_connection()].
-#' @param chunk_size Integer. Features per `IN`-clause.
-#' @return `data.table` with columns
-#'   `sample, feature, mz, fragment_mz, int, ms1_scan, ms2_scan, ms1_int`.
+#' @param chunk_size Features per query.
+#' @return `data.table`, one row per (MS1 scan, MS2 centroid):
+#'   `sample, feature, mz` (precursor), `fragment_mz, int, ms1_scan,
+#'   ms2_scan, ms1_int, apex_scan, ms1_rt, ms2_rt`. `apex_scan` is the
+#'   apex found upstream (xcms peak or nearest scan to the target RT);
+#'   the RT columns are `NULL`/`NA` for parquets written without `rt`.
 #' @keywords internal
 #' @export
 batch_get_feature_data <- function(feature_ids, con, chunk_size = 500) {
-  # DuckDB is fast at IN clauses but we chunk to avoid overly long SQL
+  has_rt <- "rt" %in% DBI::dbListFields(con, "pointers") && "rt" %in% DBI::dbListFields(con, "pool")
+  rt_select <- if (has_rt) "p.rt AS ms1_rt,\n        m.rt AS ms2_rt" else "NULL AS ms1_rt,\n        NULL AS ms2_rt"
+
   chunks <- split(feature_ids, ceiling(seq_along(feature_ids) / chunk_size))
-  
+
   results <- data.table::rbindlist(lapply(chunks, function(ids) {
     id_list <- paste0("'", ids, "'", collapse = ", ")
     query <- sprintf("
@@ -68,7 +76,9 @@ batch_get_feature_data <- function(feature_ids, con, chunk_size = 500) {
         m.int,
         p.scan AS ms1_scan,
         m.scan AS ms2_scan,
-        p.ms1_int
+        p.ms1_int,
+        p.apex_scan,
+        %s
       FROM feat_pointers p
       LEFT JOIN pool m ON (
         p.scan + 1 = m.scan AND
@@ -76,7 +86,7 @@ batch_get_feature_data <- function(feature_ids, con, chunk_size = 500) {
       )
       WHERE (m.mz <= p.mz_target + 2 OR m.mz IS NULL)
       ORDER BY p.feature, p.sample, p.scan
-    ", id_list)
+    ", id_list, rt_select)
     data.table::as.data.table(DBI::dbGetQuery(con, query))
   }))
   
@@ -106,57 +116,112 @@ batch_get_feature_data <- function(feature_ids, con, chunk_size = 500) {
   sum(w * mz[keep]) / sum(w)
 }
 
+#' Per-sample FWHM crossing scans, apex-anchored (not window-max-anchored)
+#'
+#' The half-max threshold is fixed at the intensity *at the apex scan*,
+#' never at the trace's own max - a co-eluting neighbor peak elsewhere in
+#' the (already apex-windowed-by-nothing-yet, i.e. still-full) trace can
+#' have higher intensity than the true feature's own apex, and using the
+#' trace's max as the reference would silently pick the neighbor's
+#' half-height instead. Walks outward from the apex and stops at the
+#' FIRST sub-threshold scan on each side (a literal FWHM, not a smoothed
+#' or interpolated one); if no crossing is found before the edge of
+#' whatever data was actually extracted upstream, clamps to that edge
+#' rather than erroring, extrapolating, or falling back to any other
+#' width - deliberately asymmetric in how forgiving it is between the two
+#' data routes (see `08_carpeDIAMS/carpeDIAMS_optimization`'s Stage E
+#' notes: the xcms route's extraction window has generous peak-shape-aware
+#' slack, so a clamp is rare; the target-list route's fixed rt_width does
+#' not, so a clamp there more often means "hit the extraction boundary",
+#' not "found the true half-max").
+#'
+#' `scan`/`int` may contain the same `(scan, int)` pair repeated many
+#' times (one row per MS2 fragment sharing that MS1 scan) - deduplicated
+#' before the walk, since duplicates would not change the FWHM crossing
+#' point but would make the row-index walk meaningless.
+#'
+#' @param scan Numeric/integer MS1 scan numbers (may contain duplicates).
+#' @param int MS1 intensity at each `scan` (same length as `scan`).
+#' @param apex_scan Numeric. The reference apex scan; not required to be
+#'   an exact match in `scan` (falls back to the nearest one present).
+#' @return `list(lo = <scan>, hi = <scan>)`.
+#' @keywords internal
+#' @noRd
+.fwhm_bounds <- function(scan, int, apex_scan) {
+  tr <- unique(data.table::data.table(scan = scan, int = int))
+  data.table::setorder(tr, scan)
+  apex_row <- which.min(abs(tr$scan - apex_scan))
+  half <- tr$int[apex_row] / 2
+
+  lo <- tr$scan[apex_row]
+  if (apex_row > 1L) {
+    for (i in (apex_row - 1L):1L) {
+      if (tr$int[i] < half) break
+      lo <- tr$scan[i]
+    }
+  }
+  hi <- tr$scan[apex_row]
+  if (apex_row < nrow(tr)) {
+    for (i in (apex_row + 1L):nrow(tr)) {
+      if (tr$int[i] < half) break
+      hi <- tr$scan[i]
+    }
+  }
+  list(lo = lo, hi = hi)
+}
+
+#' Apply `.fwhm_bounds()` per sample and filter `dt` to the resulting window
+#'
+#' Note: `dt` at this point has already had fragment-less pointer rows
+#' dropped (`process_pseudo_spec()`'s `!is.na(int) & !is.na(fragment_mz)`
+#' filter, applied before this is ever called) - so the MS1 trace this
+#' walks is "scans that had at least one detected fragment", not the
+#' complete raw MS1 trace. This matches `apex_source = "recompute"`'s
+#' existing (pre-existing, unchanged) behavior exactly, so defaults stay
+#' bit-identical, but it does mean a genuinely fragment-free scan near a
+#' true half-max crossing is invisible to the walk - a real, inherited
+#' limitation of computing the window downstream of fragment matching,
+#' not something specific to FWHM. Left as-is deliberately: fixing it
+#' would change `apex_source = "recompute"`'s pinned regression numbers
+#' too, which is a separate, bigger decision than adding FWHM windowing.
+#' @keywords internal
+#' @noRd
+.fwhm_window <- function(dt) {
+  bounds <- dt[, .fwhm_bounds(ms1_scan, ms1_int, apex[1L]), by = sample]
+  dt <- dt[bounds, on = "sample"]
+  dt <- dt[ms1_scan >= lo & ms1_scan <= hi]
+  dt[, c("lo", "hi") := NULL]
+  dt
+}
+
 #' Build a feature's per-group statistics table from raw MS1+MS2 data.table
 #'
-#' Stages, in order:
+#' Turns one feature's raw rows into a per-group statistics table:
 #'
-#' \enumerate{
-#'   \item per-sample apex window (`buffer`);
-#'   \item pass 1 (within sample): `grouper` clusters raw `fragment_mz`
-#'     scoped to each sample separately, so this pass only ever sees
-#'     within-sample scan-to-scan jitter, never between-sample
-#'     calibration drift;
-#'   \item collapse each `(sample, pass-1 group)` to one evidence-weighted
-#'     point - intensity-weighted consensus m/z (via [.consensus_mz()])
-#'     and *summed* intensity, so a sample with more corroborating scans
-#'     contributes proportionally more evidence, not more competing
-#'     points;
-#'   \item pass 2 (across samples): `grouper` clusters those per-sample
-#'     points, resolving between-sample calibration drift - a separate,
-#'     larger-scale effect pass 1 never attempts to address. The result
-#'     is joined back onto every original raw row; `int`/`ms1_int` on
-#'     `dt` are never touched by either pass, so MS1/MS2 correspondence
-#'     stays at full `(sample, ms1_scan)` resolution throughout;
-#'   \item consensus m/z — one value per final group, written to
-#'     `group_mz` by [.consensus_mz()]. From here on m/z is a constant
-#'     label;
-#'   \item statistics closure, which reduces each group to one row and
-#'     never touches m/z again — it just carries `group_mz` through as
-#'     `fragment_mz`.
-#' }
+#' 1. Drop rows without a fragment.
+#' 2. Find each sample's apex scan (`apex_source`) and keep the scans
+#'    around it (`window_mode`).
+#' 3. Group the fragment m/z of all samples together with `grouper`.
+#' 4. Compute one consensus m/z per group (`consensus_mz_fn`).
+#' 5. Score the groups with `group_statistics_fn`.
 #'
-#' No thresholding — see [clean_pseudo_spectra()] for the composition with a
-#' [filter-contract] closure.
+#' No filtering is applied; [clean_pseudo_spectra()] adds that.
 #'
-#' The `(group, sample, ms1_scan)` aggregation computed inside the
-#' statistics closure is attached to the return value as attribute
-#' `"grouped_signal"` so downstream code (diagnostic plots) can reuse it
-#' without a second groupby.
-#'
-#' @param dt Output of [batch_get_feature_data()] restricted to one feature.
-#' @param mz_target Numeric. Precursor m/z (drives the ppm tolerance).
-#' @param grouper A grouper closure - see [grouper-contract]. Used for
-#'   both passes.
-#' @param group_statistics_fn A statistics closure - see [stats-contract].
-#' @param buffer Integer. Scan window around each sample's MS1 apex.
-#' @param consensus_mz_fn A consensus-mz closure - see
-#'   [consensus-mz-contract]. `NULL` (default) uses
-#'   [consensus_mz_weighted()] (`frac = 0.5, Isat = 1e4`) - the package's
-#'   long-standing default behavior.
-#' @return A per-group summary `data.table` (see [stats-contract]) with
-#'   one row per group, plus a `grouped_signal` attribute
-#'   (aggregated `(group, sample, ms1_scan)`) used by the diagnostic report.
-#' @keywords internal
+#' @param dt One feature's rows from [batch_get_feature_data()].
+#' @param mz_target Precursor m/z, passed to the grouper as `target_mz`.
+#' @param grouper A grouper closure ([grouper-contract]).
+#' @param group_statistics_fn A statistics closure ([stats-contract]).
+#' @param buffer With `window_mode = "buffer"`, keep scans with
+#'   `abs(ms1_scan - apex) < buffer`.
+#' @param consensus_mz_fn A consensus-mz closure
+#'   ([consensus-mz-contract]); `NULL` uses [consensus_mz_weighted()].
+#' @param apex_source `"recompute"`: the scan with the highest MS1
+#'   intensity in `dt`. `"upstream"`: `dt$apex_scan`; samples where it is
+#'   `NA` are dropped with a warning.
+#' @param window_mode `"buffer"`: fixed scan window (see `buffer`).
+#'   `"fwhm"`: walk out from the apex until MS1 intensity drops below half
+#'   the apex intensity, within the scans present in `dt`.
+#' @return The statistics table; zero rows if nothing is left at any step.
 #' @export
 process_pseudo_spec <- function(
   dt,
@@ -164,58 +229,43 @@ process_pseudo_spec <- function(
   grouper             = ppm_upgma(ppm = 30),
   group_statistics_fn = correlation_statistics(),
   buffer              = 50L,
-  consensus_mz_fn     = NULL
+  consensus_mz_fn     = NULL,
+  apex_source         = c("recompute", "upstream"),
+  window_mode         = c("buffer", "fwhm")
 ) {
+  apex_source <- match.arg(apex_source)
+  window_mode <- match.arg(window_mode)
   if (is.null(consensus_mz_fn)) consensus_mz_fn <- consensus_mz_weighted()
   if (nrow(dt) == 0) return(.empty_correlations())
   dt <- dt[!is.na(int) & !is.na(fragment_mz)]
   if (nrow(dt) == 0) return(.empty_correlations())
 
-  dt[, apex := ms1_scan[which.max(ms1_int)], by = sample]
-  dt <- dt[abs(ms1_scan - apex) < buffer]
+  if (apex_source == "recompute") {
+    dt[, apex := ms1_scan[which.max(ms1_int)], by = sample]
+  } else {
+    if (!"apex_scan" %in% names(dt))
+      cli::cli_abort(c(
+        "{.arg apex_source} = \"upstream\" requires an {.field apex_scan} column in {.arg dt}.",
+        "i" = "Select {.code p.apex_scan} in batch_get_feature_data()'s SQL, or pass it through by hand."
+      ))
+    na_samples <- dt[, all(is.na(apex_scan)), by = sample][V1 == TRUE, sample]
+    if (length(na_samples))
+      cli::cli_warn("Dropping sample{?s} {.val {na_samples}} - apex_scan is NA (didn't survive the MS2 join).")
+    dt <- dt[!(sample %in% na_samples)]
+    if (nrow(dt) == 0) return(.empty_correlations())
+    dt[, apex := apex_scan[1L], by = sample]
+  }
+
+  if (window_mode == "buffer") {
+    dt <- dt[abs(ms1_scan - apex) < buffer]
+  } else {
+    dt <- .fwhm_window(dt)
+  }
   if (nrow(dt) == 0) return(.empty_correlations())
 
-  # Pass 1 (within sample): cluster raw fragment_mz per sample - within-
-  # sample scan-to-scan jitter is a different, smaller-scale noise source
-  # than between-sample calibration drift, so this pass only sees the
-  # former.
-  dt[, group1_local := grouper(mz        = fragment_mz,
-                               intensity = int,
-                               target_mz = mz_target,
-                               scan      = ms2_scan,
-                               ms1_int   = ms1_int),
-     by = sample]
-
-  # Local ids are only unique WITHIN one sample's own grouper call (two
-  # samples' "1" are unrelated fragments). .GRP over (sample, group1_local)
-  # assigns one collision-free, table-wide-unique integer per distinct
-  # combination, independent of row order - it is not a stable id across
-  # separate calls, only a disposable join key for this one call.
-  dt[, group1 := .GRP, by = .(sample, group1_local)]
-
-  # Disposable per-sample summary, pass-2 input only: one point per
-  # (sample, group1) - intensity-weighted consensus mz (the same
-  # estimator used for the final report) and SUMMED intensity, so a
-  # sample with more corroborating scans contributes proportionally more
-  # evidence to pass 2, not more competing points. dt itself (and its
-  # ms1_scan-level resolution, which group_statistics_fn needs) is
-  # untouched by this - only a new `group` label gets joined back below.
-  pass2_input <- dt[, .(
-    fragment_mz = consensus_mz_fn(fragment_mz, int),
-    intensity   = sum(int)
-  ), by = .(sample, group1)]
-
-  # Pass 2 (across samples): cluster the per-sample summary points, then
-  # propagate the result back onto every original raw row via (sample,
-  # group1).
-  pass2_input[, group := grouper(mz        = fragment_mz,
-                                 intensity = intensity,
-                                 target_mz = mz_target)]
-  dt[pass2_input, on = .(sample, group1), group := i.group]
-  dt[, c("group1_local", "group1") := NULL]
-
-  # consensus m/z — computed once per group, before any statistics. m/z is a
-  # constant label from this point on.
+  dt[, group := grouper(mz        = fragment_mz,
+                        intensity = int,
+                        target_mz = mz_target)]
   dt[, group_mz := consensus_mz_fn(fragment_mz, int), by = group]
 
   group_statistics_fn(dt)
@@ -223,10 +273,7 @@ process_pseudo_spec <- function(
 
 #' Legacy per-group thresholder (superseded by [correlation_filtering()])
 #'
-#' Kept as an internal convenience for old scripts. New code should use
-#' `correlation_filtering(cor_thresh, fdr_thresh)` — a [filter-contract]
-#' closure that composes with [process_pseudo_spec()] via
-#' [clean_pseudo_spectra()]'s `filter_fn` argument.
+#' Not exported. Use `correlation_filtering(cor_thresh, fdr_thresh)`.
 #'
 #' @param correlations Per-group summary from a [stats-contract] closure
 #'   (typically [correlation_statistics()]).
@@ -337,74 +384,54 @@ select_pseudo_spec <- function(correlations, cor_thresh = 0.5, fdr_thresh = 0.05
 
 #' Clean pseudo-spectra for many features (main batch entry)
 #'
-#' Orchestrates: connect → fetch → per-feature [process_pseudo_spec()]
-#' (grouper + `group_statistics_fn`) → `filter_fn` → optional plot / MGF.
-#' Returns a `data.table` in the schema downstream `03_make_mgf.R` expects.
+#' Runs [process_pseudo_spec()] and `filter_fn` for every target, reading
+#' the per-sample parquets in `file_directory` through DuckDB. This is
+#' the work behind the `filter` and `finalize` stages.
 #'
-#' Guarantees exactly one outcome per element of `targets`: either real
-#' fragment rows, or a single [.deconv_error_row()] sentinel (`deconv_error`
-#' set to a reason code — `"MissingTargetInfo"`, `"MissingMs1Signal"`, or
-#' `"NoAssociatedFragments"`). No target is ever silently dropped from the
-#' return value; nothing here aborts on bad input, including a target
-#' directory with no pointer parquets at all. This is what lets
-#' [export_mgf()] guarantee one MGF block per `fd` row regardless of data
-#' quality — the property [process_xcms()]/[process_targetlist()] batching
-#' depends on, since each batch must independently account for its own
-#' slice of targets.
+#' Every target gives either fragment rows or exactly one error row with
+#' `deconv_error` set to:
+#'
+#' * `"MissingTargetInfo"`: no precursor m/z (or no RT when
+#'   `require_rt = TRUE`).
+#' * `"MissingMs1Signal"`: no pointer rows for the target, or no pointer
+#'   parquets at all.
+#' * `"NoAssociatedFragments"`: no group survived statistics or filtering,
+#'   or [process_pseudo_spec()] raised an error (errors are not shown).
 #'
 #' @param targets Character vector of feature ids.
-#' @param file_directory Path to pool/pointer parquets.
-#' @param fd Optional `featureDefinitions()`-shaped frame; supplies
-#'   `mzmed` and `rtmed` per target. A target missing from `fd`, or whose
-#'   `mzmed` (or, when `require_rt = TRUE`, `rtmed`) is `NA`, is reported
-#'   as a `"MissingTargetInfo"` sentinel row rather than processed.
-#' @param con Optional pre-opened connection (else opened + closed internally).
-#' @param buffer,fdr_thresh,cor_thresh,min_count Tunables passed downstream.
-#'   `min_count` is consumed by the default `group_statistics_fn`;
-#'   `cor_thresh` / `fdr_thresh` are consumed by the default `filter_fn`.
-#'   A custom `group_statistics_fn` / `filter_fn` may ignore them.
-#' @param grouper A grouper closure - see [grouper-contract]. Used for
-#'   both of [process_pseudo_spec()]'s passes (within-sample, then
-#'   across-sample).
-#' @param group_statistics_fn A statistics closure conforming to
-#'   [stats-contract] — receives the raw per-feature dt (with `group`
-#'   column) and returns the per-group summary (no thresholding).
-#'   `NULL` (default) uses [correlation_statistics()] with `min_count`.
-#'   Swap in [apex_correlation_statistics()] to add apex-shift columns.
-#' @param consensus_mz_fn A consensus-mz closure - see
-#'   [consensus-mz-contract]. `NULL` (default) uses
-#'   [consensus_mz_weighted()] - the package's long-standing default.
-#' @param filter_fn A filter closure conforming to [filter-contract] —
-#'   receives the per-group stats table and returns a row-subset.
-#'   `NULL` (default) uses [correlation_filtering()] with
-#'   `cor_thresh`/`fdr_thresh`. Swap in [apex_correlation_filtering()]
-#'   for apex-aware thresholding (pair with
-#'   [apex_correlation_statistics()]).
-#' @param require_rt Logical. When `TRUE`, a target whose `fd$rtmed` is
-#'   `NA` is also reported as `"MissingTargetInfo"` (not just `mzmed`).
-#'   Set by routes where RT drives scan extraction upstream (the
-#'   target-list route); `FALSE` (default) for routes where RT is purely
-#'   informational (the xcms route, where per-sample scan windows come
-#'   from `chromPeaks`, not this feature-level summary).
-#' @param batch_idx,n_batches Optional slice: process only batch
-#'   `batch_idx` of `n_batches` equal contiguous chunks of `targets`.
-#'   `batch_idx = NULL` (default) processes every target in-process.
-#'   Set both for the DAG-batched `stage = "filter"` path.
-#' @param report,report_path PDF diagnostic report on/off + path.
-#' @param mgf_dir Optional directory for per-feature MGFs.
+#' @param file_directory Directory with the per-sample parquets.
+#' @param fd Optional table with `mzmed` and `rtmed` (or `mz`/`rt`), with
+#'   rownames or a `feature_id` column matching `targets`. Without it the
+#'   precursor m/z comes from the parquets and RT is unknown.
+#' @param con Optional open connection from [setup_connection()]; it is
+#'   left open.
+#' @param grouper A grouper closure ([grouper-contract]).
+#' @param buffer Passed to [process_pseudo_spec()].
+#' @param fdr_thresh,cor_thresh Used only to build the default `filter_fn`.
+#' @param min_count Used only to build the default `group_statistics_fn`.
+#' @param group_statistics_fn A statistics closure ([stats-contract]);
+#'   `NULL` uses `correlation_statistics(min_count)`.
+#' @param filter_fn A filter closure ([filter-contract]); `NULL` uses
+#'   `correlation_filtering(cor_thresh, fdr_thresh)`.
+#' @param consensus_mz_fn,apex_source,window_mode Passed to
+#'   [process_pseudo_spec()].
+#' @param require_rt If `TRUE`, a target without RT in `fd` is a
+#'   `"MissingTargetInfo"` error. The target-list route sets this.
+#' @param batch_idx,n_batches Process only slice `batch_idx` (1-based)
+#'   of `targets` split into `n_batches` contiguous chunks. A slice past
+#'   the end returns an empty table.
+#' @param report,report_path Write diagnostic plots per feature to a PDF
+#'   (needs ggplot2). **On by default**; the `process_*()` functions turn
+#'   it off.
+#' @param mgf_dir If set, also write one MGF file per feature here.
 #' @param fetch_chunk_size Features per DuckDB query.
-#' @param progress Print a per-feature progress counter.
-#' @return A `data.table` matching the legacy 02_filter_features schema:
-#'   `mz_g2, grouped_mz, mz, total_intensity, n_samples, count, r, t_stat,
-#'   p_value, fdr, feature_id`, plus `deconv_error` (`NA` on real rows).
-#'   `mz_g2` and `mz` both carry the per-group consensus m/z.
-#'   `total_intensity` is a *mean* despite the name — the mean across
-#'   `(sample, ms1_scan)` cells of each cell's summed fragment intensity,
-#'   i.e. a representative peak height that does not scale with sample or
-#'   scan count. Column names are fixed by the downstream
-#'   `modules/annotation` contract; `deconv_error` is additive — consumers
-#'   reading these rows directly (bypassing [export_mgf()]) should filter
-#'   `is.na(deconv_error)` to get only real fragment rows.
+#' @param progress Show a progress bar.
+#' @return `data.table` with one row per kept fragment: `mz_g2` and `mz`
+#'   (both the consensus fragment m/z), `grouped_mz` (group id),
+#'   `total_intensity` (mean per-cell intensity, not a sum), `n_samples`,
+#'   `count`, `r`, `t_stat`, `p_value`, `fdr`, `feature_id`,
+#'   `deconv_error` (`NA` on real rows). Column names are what
+#'   [export_mgf()] reads.
 #' @export
 clean_pseudo_spectra <- function(
   targets,
@@ -419,15 +446,19 @@ clean_pseudo_spectra <- function(
   group_statistics_fn = NULL,
   filter_fn           = NULL,
   consensus_mz_fn     = NULL,
+  apex_source         = c("recompute", "upstream"),
+  window_mode         = c("buffer", "fwhm"),
   require_rt          = FALSE,
   batch_idx           = NULL,
   n_batches           = 1L,
   report              = TRUE,
   report_path         = "pseudo_specs_report.pdf",
   mgf_dir             = NULL,
-  fetch_chunk_size    = 200L,
+  fetch_chunk_size    = 50L,
   progress            = TRUE
 ) {
+  apex_source <- match.arg(apex_source)
+  window_mode <- match.arg(window_mode)
   if (!is.null(batch_idx)) {
     per_batch <- ceiling(length(targets) / n_batches)
     my_start  <- 1L + (as.integer(batch_idx) - 1L) * per_batch
@@ -457,13 +488,6 @@ clean_pseudo_spectra <- function(
   if (own_con && !dir.exists(file_directory))
     cli::cli_abort("{.arg file_directory} does not exist: {.path {file_directory}}")
 
-  # No sample produced a single pointer row anywhere: setup_connection()
-  # would abort on the empty glob. Skip the DB connection entirely and
-  # report every target as MissingMs1Signal instead - this degenerates to
-  # the normal per-target sentinel-row path below rather than a hard
-  # failure, so a target directory that legitimately has zero signal is a
-  # labeled result, not a crash. A directory that doesn't exist at all
-  # (above) is a usage error, not a data-quality one, and still aborts.
   if (own_con && !length(list.files(file_directory, pattern = "_pointers\\.parquet$"))) {
     return(data.table::rbindlist(lapply(targets, function(target) {
       mz_target <- if (has_fd && target %in% rownames(fd_df)) fd_df[target, "mzmed"] else NA_real_
@@ -532,7 +556,9 @@ clean_pseudo_spectra <- function(
                             grouper = grouper,
                             group_statistics_fn = group_statistics_fn,
                             buffer = buffer,
-                            consensus_mz_fn = consensus_mz_fn),
+                            consensus_mz_fn = consensus_mz_fn,
+                            apex_source = apex_source,
+                            window_mode = window_mode),
         error = function(e) NULL
       )
       if (is.null(stats) || nrow(stats) == 0)

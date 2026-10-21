@@ -14,20 +14,18 @@ validate_grouper(
 )
 }
 \arguments{
-\item{grouper}{A function conforming to [grouper-contract].}
+\item{grouper}{A function conforming to \link{grouper-contract}.}
 
 \item{mz_example}{Numeric vector to probe with.}
 
-\item{intensity, target_mz, scan, ms1_int}{Probe values for groupers
-that require them; defaults are sensible synthetic inputs.}
+\item{intensity, target_mz, scan, ms1_int}{Probe values passed to
+\code{grouper}.}
 }
 \value{
-Invisibly `TRUE` when valid; throws otherwise.
+Invisibly \code{TRUE}; errors otherwise.
 }
 \description{
-Probes a grouper with small example vectors and asserts the return
-has one integer per input and no more groups than distinct m/z
-values. Use once when wiring up a custom grouper; do not call inside
-hot loops.
+Calls \code{grouper} on a small synthetic input and errors unless it
+returns one id per input value and no more groups than distinct m/z
+values. It does not check the type of the ids.
 }
-\keyword{internal}

@@ -1,19 +1,33 @@
 
 
-#' Process a single mzML file into a pseudo-spectra MGF
+#' Build a pseudo-spectra MGF from one mzML file
+#'
+#' Single-sample route with no prior feature list. Steps:
+#'
+#' 1. Read the file and keep spectra inside `rt_range`.
+#' 2. If no spectrum is labelled MS2, assign MS levels by scan-index
+#'    parity (bbCID alternates MS1/MS2). Aborts if the split is badly
+#'    unbalanced.
+#' 3. Detect chromatographic peaks with centWave (fixed parameters:
+#'    `peakwidth = c(2, 30)`, `snthresh = 6`, `ppm = 12`,
+#'    `prefilter = c(3, 1000)`, `mzdiff = 0.01`).
+#' 4. Write pool/pointer parquets to `tmp_dir` and build one
+#'    pseudo-spectrum per peak with [clean_pseudo_spectra()].
+#' 5. Write the MGF with [export_mgf()].
 #'
 #' @param path mzML file path.
-#' @param tmp_dir working directory for intermediate parquet + outputs.
-#' @param output MGF path. `NULL` (default) writes to
-#'   `file.path(tmp_dir, "all_features.mgf")` for backward compatibility.
-#' @param rt_range retention-time window (seconds) to retain.
+#' @param tmp_dir Directory for the intermediate parquets.
+#' @param output MGF path. Required: the function stops before reading
+#'   any data if it is `NULL`.
+#' @param rt_range Retention-time window (seconds) to keep.
 #' @param grouper A grouper closure (see [grouper-contract]); `NULL`
 #'   uses `ppm_upgma(ppm = 30)`.
 #' @param group_statistics_fn A statistics closure (see [stats-contract]);
-#'   `NULL` uses `correlation_statistics()`.
+#'   `NULL` uses `correlation_statistics(min_count = 10)`.
 #' @param filter_fn A filter closure (see [filter-contract]); `NULL`
 #'   uses `correlation_filtering(cor_thresh = 0.1, fdr_thresh = 0.1)`.
-#' @return cleaned pseudo-spectra data.table (invisibly written to MGF too).
+#' @return The [clean_pseudo_spectra()] table. The MGF is written as a
+#'   side effect.
 #' @family api
 #' @export
 process_mzml <- function(path,
@@ -24,12 +38,13 @@ process_mzml <- function(path,
                          group_statistics_fn = NULL,
                          filter_fn           = NULL){
     
+    if (is.null(output)) cli::cli_abort("No output provided.")
+
     cli::cli_h1("Processing {.file {basename(path)}}")
     cli::cli_progress_step("Loading spectra and filtering RT to {rt_range[1]}-{rt_range[2]}s")
 
     sps <- Spectra(path, backend = MsBackendMzR()) |> Spectra::filterRt(rt_range)
     if (length(sps) == 0) cli::cli_abort("No spectra in RT window.")
-    if (output == NULL) cli::cli_abort("No output provided.")
 
     # --- bbCID: assign MS2 by frame structure if not already annotated ---
     if (!2 %in% Spectra::msLevel(sps)) {
@@ -110,72 +125,77 @@ process_mzml <- function(path,
 
 # ---- process_xcms ------------------------------------------------------------
 
-#' Build pseudo-spectra MGF from a grouped XcmsExperiment
+#' Build a pseudo-spectra MGF from a grouped xcms object
 #'
-#' One user-facing entry point for the xcms → MGF pipeline. Runs
-#' end-to-end for interactive use (`stage = "all"`), or as a single
-#' stage (`prepare` / `sample` / `finalize`) so that a DAG can
-#' parallelize per-sample work.
+#' Multi-sample route. Every feature in `featureDefinitions()` gets one
+#' MGF block, built from its top-`top_n` most intense samples. Run it in
+#' one call (`stage = "all"`) or one stage at a time so a scheduler can
+#' parallelize the per-sample and per-batch work.
 #'
-#' # On-disk contract
+#' # Stages
 #'
-#' All stages share a `tmp_dir` with a fixed layout — the DAG can
-#' declare dependencies on these paths without asking R what was written:
-#'
-#' \itemize{
-#'   \item `<tmp_dir>/manifest.csv` — `sample_idx,filename` (written by
-#'     `prepare`; used by `sample` to resolve `sample_file`).
-#'   \item `<tmp_dir>/mssubset.rds` — the [subset_samples_xcms()] output.
-#'   \item `<tmp_dir>/fd.rds` — the `featureDefinitions()` frame.
-#'   \item `<tmp_dir>/sample_<idx>_pool.parquet`,
-#'         `<tmp_dir>/sample_<idx>_pointers.parquet` — one pair per
-#'     sample (written by [Ms2PseudoRaw()] via [build_parquets_xcms()]).
-#'   \item `<tmp_dir>/features_batch_<i>.parquet` — one per `filter`
-#'     batch (present only when the batched path is used; `finalize`
-#'     auto-detects and aggregates them).
+#' \describe{
+#'   \item{`prepare`}{Loads `input`, builds the feature × sample
+#'     intensity matrix (`featureValues(method = "medret", value =
+#'     "into")`), optionally subsamples with apricot, and ranks the
+#'     top-`top_n` samples per feature (ties can add more). Writes
+#'     `manifest.csv`, `mssubset.rds`, `fd.rds`, `sample_topfeatures.rds`.}
+#'   \item{`sample`}{For one sample: extracts the MS1/MS2 scans inside
+#'     each qualifying feature's chromatographic peak (± `rt_buffer`)
+#'     and writes `sample_<idx>_pool.parquet` (MS2) and
+#'     `sample_<idx>_pointers.parquet` (MS1 trace per feature).}
+#'   \item{`filter`}{For one contiguous slice (`batch_idx` of
+#'     `n_batches`) of the features: groups, scores and filters
+#'     fragments with [clean_pseudo_spectra()] and writes
+#'     `features_batch_<batch_idx>.parquet`.}
+#'   \item{`finalize`}{If any `features_batch_*.parquet` exist in
+#'     `tmp_dir`, binds **all** of them; otherwise runs the filtering for
+#'     every feature in-process. Then writes the MGF with [export_mgf()].}
+#'   \item{`all`}{`prepare`, every `sample`, then `finalize` (in-process
+#'     filtering, no batches).}
 #' }
 #'
-#' Split-stage runs must share the same `tmp_dir`.
+#' All stages of one run must share `tmp_dir`.
 #'
-#' @param input An `XcmsExperiment`/`XCMSnExp`, or a path to one saved
-#'   as `.rds` / `.qs` / `.rda`. Must have gone through
-#'   `xcms::groupChromPeaks()`.
-#' @param output MGF path. Required for `stage = "all"` or `"finalize"`.
-#' @param tmp_dir Working directory for the on-disk contract. `NULL`
-#'   only allowed for `stage = "all"` (creates + cleans a `tempfile`).
-#'   Required otherwise.
-#' @param stage One of `"all"` (default, interactive), `"prepare"`,
-#'   `"sample"`, `"filter"`, `"finalize"`. `"filter"` is the batched
-#'   scale-out path (see `batch_idx`); `"finalize"` auto-aggregates any
-#'   batch parquets if present, else runs everything in-process.
-#' @param sample_idx Integer index into `manifest$sample_idx` for
-#'   `stage = "sample"`. Takes precedence over `sample_file`.
-#' @param sample_file Basename of an mzML for `stage = "sample"`;
-#'   resolved to an idx via the manifest.
-#' @param batch_idx,n_batches For `stage = "filter"`: split `targets`
-#'   into `n_batches` contiguous chunks and process chunk `batch_idx`
-#'   (1-based). One `filter` DAG job per batch; `finalize` unions them.
-#' @param subsample Logical. When `TRUE`, apricot picks `subset_size`
-#'   representative samples; `FALSE` (default) uses every sample.
-#' @param subset_size,q_prob Passed to [subset_samples_xcms()] when
-#'   `subsample = TRUE`.
-#' @param top_n Integer. Top-N samples per feature to build parquets
-#'   for (passed to [build_parquets_xcms()]).
-#' @param ppm Fragment/precursor tolerance in ppm.
-#' @param rt_buffer Seconds added to each side of every peak's RT
-#'   window (peak-alignment slack).
+#' @param input An `XcmsExperiment`/`XCMSnExp` (after
+#'   `xcms::groupChromPeaks()`), or a `.rds` / `.qs` / `.rda` path to
+#'   one. Only read by `prepare`.
+#' @param output MGF path. Required for `"all"` and `"finalize"`.
+#' @param tmp_dir Working directory. `NULL` is only allowed for
+#'   `stage = "all"`, which then uses a `tempfile()` deleted on exit.
+#' @param stage One of `"all"`, `"prepare"`, `"sample"`, `"filter"`,
+#'   `"finalize"`.
+#' @param sample_idx Row of `manifest.csv` to process at `"sample"`.
+#'   Takes precedence over `sample_file`.
+#' @param sample_file mzML basename to process at `"sample"`; looked up
+#'   in `manifest.csv`.
+#' @param subsample If `TRUE`, keep `subset_size` samples chosen by
+#'   apricot `MaxCoverageSelection` (needs Python with `apricot-select`
+#'   and `numpy`). See [subset_samples_xcms()].
+#' @param subset_size,q_prob Passed to [subset_samples_xcms()].
+#' @param top_n Number of most intense samples per feature to extract.
+#'   Used by `prepare` only.
+#' @param ppm Used twice: at `sample`, the MS1 m/z tolerance for the
+#'   precursor trace (converted to Da at the sample's largest feature
+#'   m/z); and for the default grouper `ppm_upgma(ppm = ppm)`.
+#' @param rt_buffer Seconds added to both sides of each peak's
+#'   `rtmin`/`rtmax` at `sample`.
 #' @param grouper A grouper closure (see [grouper-contract]); `NULL`
 #'   uses `ppm_upgma(ppm = ppm)`.
 #' @param group_statistics_fn A statistics closure (see [stats-contract]);
 #'   `NULL` uses `correlation_statistics(min_count = min_count)`.
 #' @param filter_fn A filter closure (see [filter-contract]); `NULL`
 #'   uses `correlation_filtering(cor_thresh, fdr_thresh)`.
-#' @param fdr_thresh,cor_thresh,min_count Consumed by the default
-#'   `filter_fn` / `group_statistics_fn`; ignored when the caller
-#'   supplies its own. Defaults mirror [process_mzml()] (permissive).
-#' @param ion_mode `"POSITIVE"` or `"NEGATIVE"`; written to MGF headers.
-#' @param ... Forwarded to [clean_pseudo_spectra()] (e.g. `buffer`).
-#' @return Invisibly the `tmp_dir` path (useful for chaining stages).
+#' @param fdr_thresh,cor_thresh,min_count Only used to build the default
+#'   `filter_fn` / `group_statistics_fn`.
+#' @param batch_idx,n_batches For `"filter"`: process slice `batch_idx`
+#'   (1-based) of `n_batches`. A slice past the last feature writes an
+#'   empty parquet.
+#' @param ion_mode `"POSITIVE"` or `"NEGATIVE"`, written as `IONMODE=`.
+#' @param ... Forwarded to [clean_pseudo_spectra()] at `"filter"` and
+#'   `"finalize"` (e.g. `buffer`, `consensus_mz_fn`, `apex_source`,
+#'   `window_mode`).
+#' @return Invisibly `tmp_dir`.
 #' @family api
 #' @export
 process_xcms <- function(
@@ -203,14 +223,14 @@ process_xcms <- function(
     ...
 ) {
     stage <- match.arg(stage)
+    .check_stage_args(stage, output, tmp_dir, sample_idx, sample_file, batch_idx)
     if (is.null(grouper))             grouper             <- ppm_upgma(ppm = ppm)
     if (is.null(group_statistics_fn)) group_statistics_fn <- correlation_statistics(min_count = min_count)
     if (is.null(filter_fn))           filter_fn           <- correlation_filtering(cor_thresh = cor_thresh,
                                                                                     fdr_thresh = fdr_thresh)
 
     if (is.null(tmp_dir)) {
-        if (stage != "all")
-            cli::cli_abort("{.arg tmp_dir} is required when {.code stage != \"all\"}.")
+        .warn_temporary_tmp_dir()
         tmp_dir <- tempfile("carpediams_")
         dir.create(tmp_dir, recursive = TRUE)
         on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
@@ -219,11 +239,11 @@ process_xcms <- function(
     }
 
     if (stage %in% c("all", "prepare"))
-        .prepare_stage(input, tmp_dir, subsample, subset_size, q_prob)
+        .prepare_stage(input, tmp_dir, subsample, subset_size, q_prob, top_n)
 
     if (stage == "sample") {
         sid <- .resolve_sample_id(sample_idx, sample_file, tmp_dir)
-        .sample_stage(tmp_dir, sid, top_n, ppm, rt_buffer)
+        .sample_stage(tmp_dir, sid, ppm, rt_buffer)
     }
 
     if (stage == "all") {
@@ -231,26 +251,20 @@ process_xcms <- function(
         cli::cli_progress_bar("Building per-sample parquets",
                               total = nrow(manifest))
         for (sid in manifest$sample_idx) {
-            suppressMessages(.sample_stage(tmp_dir, sid, top_n, ppm, rt_buffer))
+            suppressMessages(.sample_stage(tmp_dir, sid, ppm, rt_buffer))
             cli::cli_progress_update()
         }
         cli::cli_progress_done()
     }
 
-    if (stage == "filter") {
-        if (is.null(batch_idx))
-            cli::cli_abort("stage = {.val filter} requires {.arg batch_idx}.")
+    if (stage == "filter")
         .filter_stage(tmp_dir, batch_idx, n_batches, grouper,
                       group_statistics_fn, filter_fn, ...)
-    }
 
-    if (stage %in% c("all", "finalize")) {
-        if (is.null(output))
-            cli::cli_abort("{.arg output} is required for stage {.val {stage}}.")
+    if (stage %in% c("all", "finalize"))
         .finalize_stage(tmp_dir, output, ppm, grouper,
                         group_statistics_fn, filter_fn,
                         ion_mode, ...)
-    }
 
     invisible(tmp_dir)
 }
@@ -285,7 +299,7 @@ process_xcms <- function(
 
 #' @keywords internal
 #' @noRd
-.prepare_stage <- function(input, tmp_dir, subsample, subset_size, q_prob) {
+.prepare_stage <- function(input, tmp_dir, subsample, subset_size, q_prob, top_n) {
     cli::cli_progress_step("Loading xcms object")
     xobj  <- .load_xcms_input(input)
     fd_df <- as.data.frame(xcms::featureDefinitions(xobj))
@@ -319,6 +333,23 @@ process_xcms <- function(
         subsample = subsample
     )
 
+    # Top-N-per-feature ranking, computed once against mssubset$assay - i.e.
+    # AFTER subset_samples_xcms() has resolved apricot-on (subsetted) or
+    # apricot-off (full passthrough). Previously this exact computation was
+    # redone from scratch inside every per-sample build_parquets_xcms() call;
+    # relocating it here turns O(samples) full-matrix rescans into one.
+    cli::cli_progress_step("Ranking top-{top_n} sample{?s} per feature")
+    assay_tbl <- tibble::as_tibble(mssubset$assay, rownames = "name")
+    colnames(assay_tbl) <- c("name", rownames(fd_df))
+    topX <- assay_tbl |>
+        tidyr::pivot_longer(cols = -"name", names_to = "feature_id") |>
+        tidyr::replace_na(list(value = 0)) |>
+        dplyr::group_by(feature_id) |>
+        dplyr::slice_max(value, n = top_n) |>
+        dplyr::ungroup()
+    sample_topfeatures <- split(topX$feature_id, topX$name)
+    rm(assay_tbl, topX)
+
     manifest <- data.frame(
         sample_idx = seq_along(xcms::fileNames(mssubset$msobject)),
         filename   = xcms::fileNames(mssubset$msobject),
@@ -328,6 +359,7 @@ process_xcms <- function(
                      row.names = FALSE)
     saveRDS(mssubset, file.path(tmp_dir, "mssubset.rds"))
     saveRDS(fd_df, file.path(tmp_dir, "fd.rds"))
+    saveRDS(sample_topfeatures, file.path(tmp_dir, "sample_topfeatures.rds"))
 
     cli::cli_alert_success(
         "Prepare complete: {nrow(manifest)} sample{?s}, {nrow(fd_df)} feature{?s} -> {.path {tmp_dir}}")
@@ -335,15 +367,21 @@ process_xcms <- function(
 
 #' @keywords internal
 #' @noRd
-.sample_stage <- function(tmp_dir, sample_idx, top_n, ppm, rt_buffer) {
-    mssubset <- readRDS(file.path(tmp_dir, "mssubset.rds"))
-    fd       <- readRDS(file.path(tmp_dir, "fd.rds"))
+.sample_stage <- function(tmp_dir, sample_idx, ppm, rt_buffer) {
+    mssubset           <- readRDS(file.path(tmp_dir, "mssubset.rds"))
+    fd                 <- readRDS(file.path(tmp_dir, "fd.rds"))
+    sample_topfeatures <- readRDS(file.path(tmp_dir, "sample_topfeatures.rds"))
+
+    sample_file         <- basename(xcms::fileNames(mssubset$msobject)[sample_idx])
+    qualifying_features <- sample_topfeatures[[sample_file]]
+    if (is.null(qualifying_features)) qualifying_features <- character(0)
+
     build_parquets_xcms(
-        mssubset  = mssubset, fd = fd, out_dir = tmp_dir,
-        sample_id = sample_idx,
-        top_n     = top_n,
-        ppm       = ppm,
-        rt_buffer = rt_buffer
+        mssubset            = mssubset, fd = fd, out_dir = tmp_dir,
+        sample_id           = sample_idx,
+        qualifying_features = qualifying_features,
+        ppm                 = ppm,
+        rt_buffer           = rt_buffer
     )
 }
 
@@ -421,6 +459,37 @@ process_xcms <- function(
     invisible(cleaned)
 }
 
+#' Abort before any work if `stage` is missing an argument it needs.
+#' @keywords internal
+#' @noRd
+.check_stage_args <- function(stage, output, tmp_dir, sample_idx,
+                              sample_file, batch_idx) {
+    if (stage != "all" && is.null(tmp_dir))
+        cli::cli_abort("{.arg tmp_dir} is required when {.code stage != \"all\"}. Nothing was run.")
+    if (stage == "sample" && is.null(sample_idx) && is.null(sample_file))
+        cli::cli_abort("Provide {.arg sample_idx} or {.arg sample_file} for {.code stage = \"sample\"}. Nothing was run.")
+    if (stage == "filter" && is.null(batch_idx))
+        cli::cli_abort("{.code stage = \"filter\"} requires {.arg batch_idx}. Nothing was run.")
+    if (stage %in% c("all", "finalize") && is.null(output)) {
+        has_results <- !is.null(tmp_dir) &&
+            length(list.files(tmp_dir, pattern = "\\.parquet$")) > 0
+        cli::cli_abort(c(
+            "{.arg output} is required for stage {.val {stage}}. Nothing was run.",
+            if (has_results) c("i" = "Results already in {.path {tmp_dir}} can be written to an MGF with {.code stage = \"finalize\"} and an {.arg output} path.")
+        ))
+    }
+    invisible(TRUE)
+}
+
+#' @keywords internal
+#' @noRd
+.warn_temporary_tmp_dir <- function() {
+    cli::cli_alert_warning(
+        "No {.arg tmp_dir} given: intermediate results are deleted when this
+         call ends, also if it fails. Pass {.arg tmp_dir} to keep them; a
+         failed run can then be finished with {.code stage = \"finalize\"}.")
+}
+
 #' @keywords internal
 #' @noRd
 .resolve_sample_id <- function(sample_idx, sample_file, tmp_dir) {
@@ -437,54 +506,39 @@ process_xcms <- function(
 
 # ---- process_targetlist ------------------------------------------------------
 
-#' Build pseudo-spectra MGF from mzML file(s) against a target list
+#' Build a pseudo-spectra MGF from mzML file(s) and a target list
 #'
-#' User-facing entry point for the targeted workflow: given a CSV of
-#' `mz`/`rt` targets and one-or-many mzML files, produce an MGF of
-#' pseudo-spectra. Same `stage`/`sample_idx` shape as [process_xcms()]
-#' so a DAG can parallelize per-sample; interactive users leave
-#' `stage = "all"`.
+#' Targeted route: no peak detection. Every target is extracted from
+#' every file, in a fixed RT window around its `rt`. Same stages and
+#' `tmp_dir` layout as [process_xcms()], except that `prepare` writes
+#' only `manifest.csv` and `fd.rds` (no subsampling, no top-N ranking).
 #'
-#' # On-disk contract (identical to [process_xcms()])
+#' Target-list handling:
 #'
-#' \itemize{
-#'   \item `<tmp_dir>/manifest.csv` — `sample_idx,filename`.
-#'   \item `<tmp_dir>/fd.rds` — feature-definition frame derived from
-#'     the target list (`feature_id`, `mzmed`, `rtmed`).
-#'   \item `<tmp_dir>/sample_<idx>_pool.parquet`,
-#'         `<tmp_dir>/sample_<idx>_pointers.parquet`.
-#' }
+#' * Needs `mz` and `rt` columns; `feature` is optional (ids
+#'   `FT01`, `FT02`, … are generated when missing).
+#' * If the largest `rt` is below 60 it is taken as minutes and
+#'   converted to seconds.
+#' * Rows with missing `mz` or `rt` are kept and reported as
+#'   `DeconvERROR:MissingTargetInfo` in the MGF.
 #'
-#' @param input Single mzML path, a directory of mzMLs, or a character
-#'   vector of mzML paths.
-#' @param output MGF path. Required for `stage = "all"` or `"finalize"`.
-#' @param targetlist Path to CSV with `mz` and `rt` columns (optional
-#'   `feature`), or a data.frame with the same shape.
-#' @param tmp_dir Working directory. `NULL` only for `stage = "all"`
-#'   (creates + cleans a `tempfile`); required otherwise.
-#' @param stage One of `"all"`, `"prepare"`, `"sample"`, `"filter"`,
-#'   `"finalize"`. `"filter"` is the batched scale-out path;
-#'   `"finalize"` auto-aggregates batch parquets if present.
-#' @param sample_idx,sample_file Sample addressing for
-#'   `stage = "sample"`; idx is 1-based into `manifest`.
-#' @param batch_idx,n_batches For `stage = "filter"`: split `targets`
-#'   into `n_batches` contiguous chunks and process chunk `batch_idx`
-#'   (1-based). One `filter` DAG job per batch; `finalize` unions them.
-#' @param ppm Fragment/precursor tolerance in ppm.
-#' @param rt_width Total width (seconds) of the RT window around each
-#'   target's `rt` when extracting scans.
-#' @param grouper A grouper closure (see [grouper-contract]); `NULL`
-#'   uses `ppm_upgma(ppm = ppm)`.
-#' @param group_statistics_fn A statistics closure (see [stats-contract]);
-#'   `NULL` uses `correlation_statistics(min_count = min_count)`.
-#' @param filter_fn A filter closure (see [filter-contract]); `NULL`
-#'   uses `correlation_filtering(cor_thresh, fdr_thresh)`.
-#' @param fdr_thresh,cor_thresh,min_count Consumed by the default
-#'   `filter_fn` / `group_statistics_fn`; ignored when the caller
-#'   supplies its own. Permissive defaults.
-#' @param ion_mode `"POSITIVE"` or `"NEGATIVE"`.
-#' @param ... Forwarded to [clean_pseudo_spectra()].
-#' @return Invisibly the `tmp_dir` path.
+#' At `sample`, files with no MS2 labels get MS levels by scan-index
+#' parity (as in [process_mzml()]). Samples where no target falls within
+#' the window write no parquets; `stage = "all"` reports them.
+#'
+#' @inheritParams process_xcms
+#' @param input One mzML path, a directory of mzMLs (non-recursive), or
+#'   a character vector of mzML paths. Only read by `prepare`.
+#' @param targetlist CSV path or data.frame (see Details). Required for
+#'   `"all"` and `"prepare"`.
+#' @param ppm Used twice: at `sample`, the MS1 m/z tolerance for the
+#'   precursor trace (converted to Da at the largest target m/z); and
+#'   for the default grouper `ppm_upgma(ppm = ppm)`.
+#' @param rt_width Total width (seconds) of the extraction window,
+#'   centred on each target's `rt`.
+#' @param ... Forwarded to [clean_pseudo_spectra()] at `"filter"` and
+#'   `"finalize"`. `require_rt` is always `TRUE` on this route.
+#' @return Invisibly `tmp_dir`.
 #' @family api
 #' @export
 process_targetlist <- function(
@@ -509,14 +563,16 @@ process_targetlist <- function(
     ...
 ) {
     stage <- match.arg(stage)
+    .check_stage_args(stage, output, tmp_dir, sample_idx, sample_file, batch_idx)
+    if (stage %in% c("all", "prepare") && is.null(targetlist))
+        cli::cli_abort("{.arg targetlist} is required for stage {.val {stage}}. Nothing was run.")
     if (is.null(grouper))             grouper             <- ppm_upgma(ppm = ppm)
     if (is.null(group_statistics_fn)) group_statistics_fn <- correlation_statistics(min_count = min_count)
     if (is.null(filter_fn))           filter_fn           <- correlation_filtering(cor_thresh = cor_thresh,
                                                                                     fdr_thresh = fdr_thresh)
 
     if (is.null(tmp_dir)) {
-        if (stage != "all")
-            cli::cli_abort("{.arg tmp_dir} is required when {.code stage != \"all\"}.")
+        .warn_temporary_tmp_dir()
         tmp_dir <- tempfile("carpediams_")
         dir.create(tmp_dir, recursive = TRUE)
         on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
@@ -524,11 +580,8 @@ process_targetlist <- function(
         dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
     }
 
-    if (stage %in% c("all", "prepare")) {
-        if (is.null(targetlist))
-            cli::cli_abort("{.arg targetlist} is required for stage {.val {stage}}.")
+    if (stage %in% c("all", "prepare"))
         .prepare_targetlist_stage(input, targetlist, tmp_dir)
-    }
 
     if (stage == "sample") {
         sid <- .resolve_sample_id(sample_idx, sample_file, tmp_dir)
@@ -556,20 +609,14 @@ process_targetlist <- function(
                  {rt_width}s of an MS1 scan.")
     }
 
-    if (stage == "filter") {
-        if (is.null(batch_idx))
-            cli::cli_abort("stage = {.val filter} requires {.arg batch_idx}.")
+    if (stage == "filter")
         .filter_stage(tmp_dir, batch_idx, n_batches, grouper,
                       group_statistics_fn, filter_fn, require_rt = TRUE, ...)
-    }
 
-    if (stage %in% c("all", "finalize")) {
-        if (is.null(output))
-            cli::cli_abort("{.arg output} is required for stage {.val {stage}}.")
+    if (stage %in% c("all", "finalize"))
         .finalize_stage(tmp_dir, output, ppm, grouper,
                         group_statistics_fn, filter_fn,
                         ion_mode, require_rt = TRUE, ...)
-    }
 
     invisible(tmp_dir)
 }
@@ -641,11 +688,6 @@ process_targetlist <- function(
     utils::write.csv(manifest, file.path(tmp_dir, "manifest.csv"),
                      row.names = FALSE)
 
-    # fd.rds keeps every target, valid or not - a target missing mz/rt is
-    # not filtered out here. clean_pseudo_spectra() (called with
-    # require_rt = TRUE for this route) reports it per-target as a
-    # DeconvERROR:MissingTargetInfo sentinel row at finalize(), so every
-    # target unconditionally gets exactly one MGF block.
     fd <- data.frame(
         feature_id = tl$feature,
         mzmed      = tl$mz,
@@ -743,93 +785,49 @@ process_targetlist <- function(
 
 # ---- carpediams (unified dispatch) -------------------------------------------
 
-#' Build pseudo-spectra MGF - unified entry point
+#' Build a pseudo-spectra MGF (dispatcher)
 #'
-#' Auto-dispatches to [process_mzml()], [process_targetlist()], or
-#' [process_xcms()] based on the shape of `input` and whether a
-#' `targetlist` is supplied. Same defaults, thresholds, and stage
-#' machinery as the routed function.
+#' Picks [process_xcms()], [process_targetlist()] or [process_mzml()]
+#' from `input` and `targetlist`, and passes everything else on.
 #'
-#' # Routing rules
+#' # Routing
 #'
-#' \itemize{
-#'   \item An `XcmsExperiment`/`XCMSnExp` object, or a path to one
-#'     (`.rds` / `.qs` / `.rda`) -> [process_xcms()].
-#'     `targetlist` is ignored (with a warning) — the xcms object
-#'     carries its own feature definitions.
-#'   \item Any mzML input **with** a `targetlist` -> [process_targetlist()].
-#'   \item A single mzML **without** a `targetlist` -> [process_mzml()].
-#'   \item A directory or a character vector of mzMLs without a
-#'     `targetlist` -> error (ambiguous — supply a targetlist or run
-#'     [process_mzml()] per file).
-#' }
+#' | `input`                                         | `targetlist` | Route                   |
+#' |:------------------------------------------------|:-------------|:------------------------|
+#' | `XcmsExperiment`/`XCMSnExp`, or `.rds`/`.qs`/`.rda` path | ignored (warning) | [process_xcms()] |
+#' | mzML file, mzML directory, or vector of paths   | given        | [process_targetlist()]  |
+#' | one mzML file                                   | `NULL`       | [process_mzml()]        |
+#' | mzML directory or vector of paths               | `NULL`       | error                   |
 #'
-#' # Extension points
+#' # Pluggable steps
 #'
-#' Three research-swappable closures parameterize the pipeline. Each
-#' has its own contract; each ships with pre-built factories plus a
-#' `validate_*` helper for custom implementations.
+#' * `grouper` ([grouper-contract]): [ppm_upgma()], [abs_upgma()],
+#'   [iaac_grouper()], [pelt_grouper()], [bin_grouper()].
+#' * `group_statistics_fn` ([stats-contract]): [correlation_statistics()],
+#'   [apex_correlation_statistics()].
+#' * `filter_fn` ([filter-contract]): [correlation_filtering()],
+#'   [apex_correlation_filtering()] (needs [apex_correlation_statistics()]).
+#' * `consensus_mz_fn` ([consensus-mz-contract]): [consensus_mz_weighted()].
+#'   Pass it through `...`; xcms and target-list routes only.
 #'
-#' \strong{`grouper` — fragment m/z grouping ([grouper-contract])}
-#' \itemize{
-#'   \item [ppm_upgma()] — 1-D UPGMA, ppm-scaled tolerance (default,
-#'     `ppm_upgma(ppm = 30)`).
-#'   \item [abs_upgma()] — 1-D UPGMA, fixed-Da tolerance.
-#'   \item [iaac_grouper()] — intensity-adaptive agglomerative clustering.
-#'   \item [pelt_grouper()] — globally-optimal PELT partition under a
-#'     shot-noise cost model.
-#'   \item [bin_grouper()] — fixed-width binning (fast, boundary-fragile).
-#' }
-#' Write your own conforming to [grouper-contract] and sanity-check with
-#' [validate_grouper()].
-#'
-#' \strong{`group_statistics_fn` — per-group statistics ([stats-contract])}
-#' \itemize{
-#'   \item [correlation_statistics()] — Pearson r + BH FDR against MS1
-#'     (default).
-#'   \item [apex_correlation_statistics()] — as above plus intra-sample
-#'     MS1<->MS2 apex-shift median/IQR across samples (pair with
-#'     [apex_correlation_filtering()] downstream).
-#' }
-#'
-#' \strong{`filter_fn` — per-group thresholding ([filter-contract])}
-#' \itemize{
-#'   \item [correlation_filtering()] — thresholds on `correlation` +
-#'     `fdr` (default).
-#'   \item [apex_correlation_filtering()] — as above plus thresholds on
-#'     `apex_shift_med` / `apex_shift_iqr` (requires
-#'     [apex_correlation_statistics()] upstream — a helpful error is
-#'     raised otherwise).
-#' }
-#'
-#' \strong{`consensus_mz_fn` — per-group m/z summarization
-#' ([consensus-mz-contract])}
-#' \itemize{
-#'   \item [consensus_mz_weighted()] — intensity-weighted mean over the
-#'     FWHM core, i.e. centroids at or above `frac * max(intensity)`
-#'     within the group (default, `frac = 0.5, Isat = 1e4`).
-#' }
-#' Not a top-level `carpediams()` parameter — pass it through `...`
-#' (forwarded all the way to [clean_pseudo_spectra()] /
-#' [process_pseudo_spec()], e.g.
-#' `carpediams(..., consensus_mz_fn = consensus_mz_weighted(frac = 0.75))`).
-#'
-#' @param input Path or object; see routing rules.
-#' @param output MGF path.
-#' @param targetlist Optional CSV path or data.frame with `mz`, `rt`
-#'   columns. Forces the targetlist route when combined with mzML input.
-#' @param tmp_dir Working directory. `NULL` (default) creates and cleans
-#'   a `tempfile()`. Pass an explicit path for split-stage runs.
-#' @param grouper A grouper closure (see [grouper-contract]); `NULL`
-#'   uses `ppm_upgma(ppm = 30)`.
-#' @param group_statistics_fn A statistics closure (see [stats-contract]);
-#'   `NULL` uses `correlation_statistics()`.
-#' @param filter_fn A filter closure (see [filter-contract]); `NULL`
-#'   uses `correlation_filtering()`.
-#' @param ... Forwarded to the routed function. See that function's
-#'   docs for stage machinery, thresholds, and route-specific params.
-#' @return Whatever the routed function returns (typically an invisible
-#'   `data.table` of pseudo-spectra or the `tmp_dir` path).
+#' @param input Object or path; see Routing.
+#' @param output MGF path. Not needed for the `"prepare"`, `"sample"`
+#'   and `"filter"` stages.
+#' @param targetlist `NULL`, or a CSV path / data.frame with `mz` and
+#'   `rt` columns.
+#' @param tmp_dir Working directory. `NULL` uses a `tempfile()` that is
+#'   **deleted when the call returns**, so staged runs must pass a path.
+#' @param grouper A grouper closure; `NULL` uses the route default
+#'   (`ppm_upgma(ppm = 20)` for xcms/target-list via their `ppm`
+#'   argument, `ppm_upgma(ppm = 30)` for mzML).
+#' @param group_statistics_fn A statistics closure; `NULL` uses
+#'   `correlation_statistics(min_count = 10)`.
+#' @param filter_fn A filter closure; `NULL` uses
+#'   `correlation_filtering(cor_thresh = 0.1, fdr_thresh = 0.1)`.
+#' @param ... Passed to the routed function (`stage`, `ppm`, `top_n`,
+#'   …). [process_mzml()] takes no extra arguments.
+#' @return What the routed function returns: `tmp_dir` (invisibly) for
+#'   the xcms and target-list routes, the pseudo-spectra table for mzML.
 #' @family api
 #' @examples
 #' \dontrun{
@@ -855,8 +853,16 @@ carpediams <- function(input, output,
                        group_statistics_fn = NULL,
                        filter_fn           = NULL,
                        ...) {
+    if (missing(output)) output <- NULL
     route <- .detect_route(input, targetlist)
     cli::cli_h1("carpediams route: {.strong {route}}")
+
+    if (route != "mzml" && is.null(tmp_dir)) {
+        stage <- if ("stage" %in% ...names()) ...elt(match("stage", ...names())) else "all"
+        if (!identical(stage, "all"))
+            cli::cli_abort("{.arg tmp_dir} is required when {.code stage != \"all\"}. Nothing was run.")
+        .warn_temporary_tmp_dir()
+    }
 
     if (is.null(tmp_dir)) {
         tmp_dir <- tempfile("carpediams_")

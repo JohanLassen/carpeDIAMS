@@ -5,15 +5,14 @@
 \title{Consensus m/z contract}
 \description{
 All consensus-m/z closures in this package share one signature so they
-are drop-in replaceable in [process_pseudo_spec()]:
+are drop-in replaceable in \code{\link[=process_pseudo_spec]{process_pseudo_spec()}}:
 }
 \details{
 \preformatted{
   function(mz, int) -> single numeric consensus m/z
 }
 
-Called once per group at the pass-2 collapse step (per `(sample,
-pass-1 group)`) and once per final group (writing `group_mz`). Must
-return `NA_real_` for a group with no finite values, never error.
+Called once per fragment group, after grouping; the result becomes the
+group's \code{fragment_mz}. Should return \code{NA_real_}, not error, when the
+group has no finite values.
 }
-\keyword{internal}

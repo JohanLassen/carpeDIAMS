@@ -4,23 +4,25 @@
 \alias{getBackendPeaks}
 \title{Extract per-feature chromPeaks rows from an XCMSnExp}
 \usage{
-getBackendPeaks(object, fd, sample_filter = NULL)
+getBackendPeaks(object, fd, all_peaks, sample_filter = NULL)
 }
 \arguments{
-\item{object}{An `XCMSnExp`. Source of `chromPeaks`.}
+\item{object}{Unused.}
 
-\item{fd}{`featureDefinitions()` table (rows = features, `peakidx` list-col).}
+\item{fd}{\code{featureDefinitions()} table with a \code{peakidx} list column.}
 
-\item{sample_filter}{Optional integer vector; keep only peaks from these samples.}
+\item{all_peaks}{\code{chromPeaks()} of the object \code{fd} came from. Must be
+the full, unsubsetted table, because \code{peakidx} indexes its rows.}
+
+\item{sample_filter}{Optional sample indices (into \code{all_peaks[, "sample"]})
+to keep.}
 }
 \value{
-Named list of chromPeaks-row matrices (one per feature id).
+Named list (by feature id) of peak matrices; empty matrices
+for features with no peaks.
 }
 \description{
-Returns, per feature in `fd`, the matrix of `chromPeaks` rows that belong
-to it (via `peakidx`). Reads `xcms::chromPeaks(object)` internally, so
-`object` must be the full msobject that `fd` was built from — subsetting
-the msobject changes row indices and breaks the `peakidx` <->
-`chromPeaks` invariant.
+For each feature in \code{fd}, the rows of \code{all_peaks} listed in its
+\code{peakidx}.
 }
 \keyword{internal}

@@ -1,11 +1,16 @@
 Package: carpeDIAMS
-Title: Consensus MS2 Spectrum Extraction from PASEF/bbCID Data
+Title: Pseudo-DDA MS2 Spectra from bbCID Data
 Version: 0.1.0
 Authors@R: 
     person("Johan", "Lassen", email = "johan@example.com", role = c("aut", "cre"))
-Description: Intensity-adaptive centroiding (IAAC) and consensus MS2 spectrum
-    extraction from Bruker timsTOF PASEF and bbCID data.
+Description: Builds pseudo-DDA MS2 spectra from broadband CID (bbCID) LC-MS
+    data. MS2 centroids near each precursor are grouped by m/z, and groups
+    whose intensity tracks the precursor's MS1 elution profile are kept.
+    Works from a grouped 'xcms' object, mzML files with a target list, or a
+    single mzML file, and writes one MGF block per feature.
 License: MIT + file LICENSE
+URL: https://johanlassen.github.io/carpeDIAMS/, https://github.com/JohanLassen/carpeDIAMS
+BugReports: https://github.com/JohanLassen/carpeDIAMS/issues
 Encoding: UTF-8
 Imports:
     Rcpp,
@@ -32,8 +37,10 @@ Suggests:
     rmarkdown,
     qs,
     testthat (>= 3.0.0)
+Config/Needs/website: pkgdown
 VignetteBuilder: knitr
 LinkingTo: Rcpp
 SystemRequirements: Python (>= 3.8), apricot-select, numpy
 Config/roxygen2/version: 8.1.0
+Roxygen: list(markdown = TRUE)
 Config/testthat/edition: 3

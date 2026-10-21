@@ -10,66 +10,49 @@ process_pseudo_spec(
   grouper = ppm_upgma(ppm = 30),
   group_statistics_fn = correlation_statistics(),
   buffer = 50L,
-  consensus_mz_fn = NULL
+  consensus_mz_fn = NULL,
+  apex_source = c("recompute", "upstream"),
+  window_mode = c("buffer", "fwhm")
 )
 }
 \arguments{
-\item{dt}{Output of [batch_get_feature_data()] restricted to one feature.}
+\item{dt}{One feature's rows from \code{\link[=batch_get_feature_data]{batch_get_feature_data()}}.}
 
-\item{mz_target}{Numeric. Precursor m/z (drives the ppm tolerance).}
+\item{mz_target}{Precursor m/z, passed to the grouper as \code{target_mz}.}
 
-\item{grouper}{A grouper closure - see [grouper-contract]. Used for
-both passes.}
+\item{grouper}{A grouper closure (\link{grouper-contract}).}
 
-\item{group_statistics_fn}{A statistics closure - see [stats-contract].}
+\item{group_statistics_fn}{A statistics closure (\link{stats-contract}).}
 
-\item{buffer}{Integer. Scan window around each sample's MS1 apex.}
+\item{buffer}{With \code{window_mode = "buffer"}, keep scans with
+\code{abs(ms1_scan - apex) < buffer}.}
 
-\item{consensus_mz_fn}{A consensus-mz closure - see
-[consensus-mz-contract]. `NULL` (default) uses
-[consensus_mz_weighted()] (`frac = 0.5, Isat = 1e4`) - the package's
-long-standing default behavior.}
+\item{consensus_mz_fn}{A consensus-mz closure
+(\link{consensus-mz-contract}); \code{NULL} uses \code{\link[=consensus_mz_weighted]{consensus_mz_weighted()}}.}
+
+\item{apex_source}{\code{"recompute"}: the scan with the highest MS1
+intensity in \code{dt}. \code{"upstream"}: \code{dt$apex_scan}; samples where it is
+\code{NA} are dropped with a warning.}
+
+\item{window_mode}{\code{"buffer"}: fixed scan window (see \code{buffer}).
+\code{"fwhm"}: walk out from the apex until MS1 intensity drops below half
+the apex intensity, within the scans present in \code{dt}.}
 }
 \value{
-A per-group summary `data.table` (see [stats-contract]) with
-  one row per group, plus a `grouped_signal` attribute
-  (aggregated `(group, sample, ms1_scan)`) used by the diagnostic report.
+The statistics table; zero rows if nothing is left at any step.
 }
 \description{
-Stages, in order:
+Turns one feature's raw rows into a per-group statistics table:
 }
 \details{
 \enumerate{
-  \item per-sample apex window (`buffer`);
-  \item pass 1 (within sample): `grouper` clusters raw `fragment_mz`
-    scoped to each sample separately, so this pass only ever sees
-    within-sample scan-to-scan jitter, never between-sample
-    calibration drift;
-  \item collapse each `(sample, pass-1 group)` to one evidence-weighted
-    point - intensity-weighted consensus m/z (via [.consensus_mz()])
-    and *summed* intensity, so a sample with more corroborating scans
-    contributes proportionally more evidence, not more competing
-    points;
-  \item pass 2 (across samples): `grouper` clusters those per-sample
-    points, resolving between-sample calibration drift - a separate,
-    larger-scale effect pass 1 never attempts to address. The result
-    is joined back onto every original raw row; `int`/`ms1_int` on
-    `dt` are never touched by either pass, so MS1/MS2 correspondence
-    stays at full `(sample, ms1_scan)` resolution throughout;
-  \item consensus m/z — one value per final group, written to
-    `group_mz` by [.consensus_mz()]. From here on m/z is a constant
-    label;
-  \item statistics closure, which reduces each group to one row and
-    never touches m/z again — it just carries `group_mz` through as
-    `fragment_mz`.
+\item Drop rows without a fragment.
+\item Find each sample's apex scan (\code{apex_source}) and keep the scans
+around it (\code{window_mode}).
+\item Group the fragment m/z of all samples together with \code{grouper}.
+\item Compute one consensus m/z per group (\code{consensus_mz_fn}).
+\item Score the groups with \code{group_statistics_fn}.
 }
 
-No thresholding — see [clean_pseudo_spectra()] for the composition with a
-[filter-contract] closure.
-
-The `(group, sample, ms1_scan)` aggregation computed inside the
-statistics closure is attached to the return value as attribute
-`"grouped_signal"` so downstream code (diagnostic plots) can reuse it
-without a second groupby.
+No filtering is applied; \code{\link[=clean_pseudo_spectra]{clean_pseudo_spectra()}} adds that.
 }
-\keyword{internal}

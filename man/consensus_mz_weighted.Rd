@@ -7,26 +7,25 @@
 consensus_mz_weighted(frac = 0.5, Isat = 10000)
 }
 \arguments{
-\item{frac}{Numeric in (0, 1]. FWHM-core cutoff as a fraction of the
-group's max intensity.}
+\item{frac}{Fraction of the group's maximum intensity a centroid
+needs to be included (\code{0.5} = half maximum).}
 
-\item{Isat}{Numeric. Weight-clipping intensity (prevents a saturated
-apex from dominating the mean).}
+\item{Isat}{Weight cap, so a few saturated centroids cannot dominate.}
 }
 \value{
-A consensus-mz closure - see [consensus-mz-contract].
+A consensus-mz closure - see \link{consensus-mz-contract}.
 }
 \description{
-Returns a consensus-mz closure wrapping the package's default
-estimator: intensity-weighted mean over centroids at or above
-`frac * max(intensity)` within the group, weight clipped at `Isat`.
-See [process_pseudo_spec()] for why the FWHM core is used
-(low-intensity centroids carry disproportionate m/z error).
+Intensity-weighted mean m/z of the centroids with intensity
+\verb{>= frac * max(intensity)} in the group, with weights capped at
+\code{Isat}. Low-intensity centroids are dropped because their m/z is
+least precise. Falls back to the unweighted mean of those centroids
+if all weights are zero.
 }
 \examples{
 f <- consensus_mz_weighted(frac = 0.5, Isat = 1e4)
 f(c(100.000, 100.001, 100.500), c(1000, 800, 50))
 }
 \seealso{
-[process_pseudo_spec()]
+\code{\link[=process_pseudo_spec]{process_pseudo_spec()}}
 }

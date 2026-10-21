@@ -2,7 +2,7 @@
 % Please edit documentation in R/api.R
 \name{carpediams}
 \alias{carpediams}
-\title{Build pseudo-spectra MGF - unified entry point}
+\title{Build a pseudo-spectra MGF (dispatcher)}
 \usage{
 carpediams(
   input,
@@ -16,103 +16,61 @@ carpediams(
 )
 }
 \arguments{
-\item{input}{Path or object; see routing rules.}
+\item{input}{Object or path; see Routing.}
 
-\item{output}{MGF path.}
+\item{output}{MGF path. Not needed for the \code{"prepare"}, \code{"sample"}
+and \code{"filter"} stages.}
 
-\item{targetlist}{Optional CSV path or data.frame with `mz`, `rt`
-columns. Forces the targetlist route when combined with mzML input.}
+\item{targetlist}{\code{NULL}, or a CSV path / data.frame with \code{mz} and
+\code{rt} columns.}
 
-\item{tmp_dir}{Working directory. `NULL` (default) creates and cleans
-a `tempfile()`. Pass an explicit path for split-stage runs.}
+\item{tmp_dir}{Working directory. \code{NULL} uses a \code{tempfile()} that is
+\strong{deleted when the call returns}, so staged runs must pass a path.}
 
-\item{grouper}{A grouper closure (see [grouper-contract]); `NULL`
-uses `ppm_upgma(ppm = 30)`.}
+\item{grouper}{A grouper closure; \code{NULL} uses the route default
+(\code{ppm_upgma(ppm = 20)} for xcms/target-list via their \code{ppm}
+argument, \code{ppm_upgma(ppm = 30)} for mzML).}
 
-\item{group_statistics_fn}{A statistics closure (see [stats-contract]);
-`NULL` uses `correlation_statistics()`.}
+\item{group_statistics_fn}{A statistics closure; \code{NULL} uses
+\code{correlation_statistics(min_count = 10)}.}
 
-\item{filter_fn}{A filter closure (see [filter-contract]); `NULL`
-uses `correlation_filtering()`.}
+\item{filter_fn}{A filter closure; \code{NULL} uses
+\code{correlation_filtering(cor_thresh = 0.1, fdr_thresh = 0.1)}.}
 
-\item{...}{Forwarded to the routed function. See that function's
-docs for stage machinery, thresholds, and route-specific params.}
+\item{...}{Passed to the routed function (\code{stage}, \code{ppm}, \code{top_n},
+…). \code{\link[=process_mzml]{process_mzml()}} takes no extra arguments.}
 }
 \value{
-Whatever the routed function returns (typically an invisible
-  `data.table` of pseudo-spectra or the `tmp_dir` path).
+What the routed function returns: \code{tmp_dir} (invisibly) for
+the xcms and target-list routes, the pseudo-spectra table for mzML.
 }
 \description{
-Auto-dispatches to [process_mzml()], [process_targetlist()], or
-[process_xcms()] based on the shape of `input` and whether a
-`targetlist` is supplied. Same defaults, thresholds, and stage
-machinery as the routed function.
+Picks \code{\link[=process_xcms]{process_xcms()}}, \code{\link[=process_targetlist]{process_targetlist()}} or \code{\link[=process_mzml]{process_mzml()}}
+from \code{input} and \code{targetlist}, and passes everything else on.
 }
-\details{
-# Routing rules
+\section{Routing}{
+\tabular{lll}{
+   \code{input} \tab \code{targetlist} \tab Route \cr
+   \code{XcmsExperiment}/\code{XCMSnExp}, or \code{.rds}/\code{.qs}/\code{.rda} path \tab ignored (warning) \tab \code{\link[=process_xcms]{process_xcms()}} \cr
+   mzML file, mzML directory, or vector of paths \tab given \tab \code{\link[=process_targetlist]{process_targetlist()}} \cr
+   one mzML file \tab \code{NULL} \tab \code{\link[=process_mzml]{process_mzml()}} \cr
+   mzML directory or vector of paths \tab \code{NULL} \tab error \cr
+}
+}
 
+\section{Pluggable steps}{
 \itemize{
-  \item An `XcmsExperiment`/`XCMSnExp` object, or a path to one
-    (`.rds` / `.qs` / `.rda`) -> [process_xcms()].
-    `targetlist` is ignored (with a warning) — the xcms object
-    carries its own feature definitions.
-  \item Any mzML input **with** a `targetlist` -> [process_targetlist()].
-  \item A single mzML **without** a `targetlist` -> [process_mzml()].
-  \item A directory or a character vector of mzMLs without a
-    `targetlist` -> error (ambiguous — supply a targetlist or run
-    [process_mzml()] per file).
+\item \code{grouper} (\link{grouper-contract}): \code{\link[=ppm_upgma]{ppm_upgma()}}, \code{\link[=abs_upgma]{abs_upgma()}},
+\code{\link[=iaac_grouper]{iaac_grouper()}}, \code{\link[=pelt_grouper]{pelt_grouper()}}, \code{\link[=bin_grouper]{bin_grouper()}}.
+\item \code{group_statistics_fn} (\link{stats-contract}): \code{\link[=correlation_statistics]{correlation_statistics()}},
+\code{\link[=apex_correlation_statistics]{apex_correlation_statistics()}}.
+\item \code{filter_fn} (\link{filter-contract}): \code{\link[=correlation_filtering]{correlation_filtering()}},
+\code{\link[=apex_correlation_filtering]{apex_correlation_filtering()}} (needs \code{\link[=apex_correlation_statistics]{apex_correlation_statistics()}}).
+\item \code{consensus_mz_fn} (\link{consensus-mz-contract}): \code{\link[=consensus_mz_weighted]{consensus_mz_weighted()}}.
+Pass it through \code{...}; xcms and target-list routes only.
+}
 }
 
-# Extension points
-
-Three research-swappable closures parameterize the pipeline. Each
-has its own contract; each ships with pre-built factories plus a
-`validate_*` helper for custom implementations.
-
-\strong{`grouper` — fragment m/z grouping ([grouper-contract])}
-\itemize{
-  \item [ppm_upgma()] — 1-D UPGMA, ppm-scaled tolerance (default,
-    `ppm_upgma(ppm = 30)`).
-  \item [abs_upgma()] — 1-D UPGMA, fixed-Da tolerance.
-  \item [iaac_grouper()] — intensity-adaptive agglomerative clustering.
-  \item [pelt_grouper()] — globally-optimal PELT partition under a
-    shot-noise cost model.
-  \item [bin_grouper()] — fixed-width binning (fast, boundary-fragile).
-}
-Write your own conforming to [grouper-contract] and sanity-check with
-[validate_grouper()].
-
-\strong{`group_statistics_fn` — per-group statistics ([stats-contract])}
-\itemize{
-  \item [correlation_statistics()] — Pearson r + BH FDR against MS1
-    (default).
-  \item [apex_correlation_statistics()] — as above plus intra-sample
-    MS1<->MS2 apex-shift median/IQR across samples (pair with
-    [apex_correlation_filtering()] downstream).
-}
-
-\strong{`filter_fn` — per-group thresholding ([filter-contract])}
-\itemize{
-  \item [correlation_filtering()] — thresholds on `correlation` +
-    `fdr` (default).
-  \item [apex_correlation_filtering()] — as above plus thresholds on
-    `apex_shift_med` / `apex_shift_iqr` (requires
-    [apex_correlation_statistics()] upstream — a helpful error is
-    raised otherwise).
-}
-
-\strong{`consensus_mz_fn` — per-group m/z summarization
-([consensus-mz-contract])}
-\itemize{
-  \item [consensus_mz_weighted()] — intensity-weighted mean over the
-    FWHM core, i.e. centroids at or above `frac * max(intensity)`
-    within the group (default, `frac = 0.5, Isat = 1e4`).
-}
-Not a top-level `carpediams()` parameter — pass it through `...`
-(forwarded all the way to [clean_pseudo_spectra()] /
-[process_pseudo_spec()], e.g.
-`carpediams(..., consensus_mz_fn = consensus_mz_weighted(frac = 0.75))`).
-}
 \examples{
 \dontrun{
 # default — correlation-based filter

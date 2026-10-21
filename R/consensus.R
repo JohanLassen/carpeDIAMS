@@ -7,26 +7,24 @@
 #'   function(mz, int) -> single numeric consensus m/z
 #' }
 #'
-#' Called once per group at the pass-2 collapse step (per `(sample,
-#' pass-1 group)`) and once per final group (writing `group_mz`). Must
-#' return `NA_real_` for a group with no finite values, never error.
+#' Called once per fragment group, after grouping; the result becomes the
+#' group's `fragment_mz`. Should return `NA_real_`, not error, when the
+#' group has no finite values.
 #'
 #' @name consensus-mz-contract
-#' @keywords internal
 NULL
 
 #' Intensity-weighted FWHM-core consensus m/z (the package default)
 #'
-#' Returns a consensus-mz closure wrapping the package's default
-#' estimator: intensity-weighted mean over centroids at or above
-#' `frac * max(intensity)` within the group, weight clipped at `Isat`.
-#' See [process_pseudo_spec()] for why the FWHM core is used
-#' (low-intensity centroids carry disproportionate m/z error).
+#' Intensity-weighted mean m/z of the centroids with intensity
+#' `>= frac * max(intensity)` in the group, with weights capped at
+#' `Isat`. Low-intensity centroids are dropped because their m/z is
+#' least precise. Falls back to the unweighted mean of those centroids
+#' if all weights are zero.
 #'
-#' @param frac Numeric in (0, 1]. FWHM-core cutoff as a fraction of the
-#'   group's max intensity.
-#' @param Isat Numeric. Weight-clipping intensity (prevents a saturated
-#'   apex from dominating the mean).
+#' @param frac Fraction of the group's maximum intensity a centroid
+#'   needs to be included (`0.5` = half maximum).
+#' @param Isat Weight cap, so a few saturated centroids cannot dominate.
 #' @return A consensus-mz closure - see [consensus-mz-contract].
 #' @seealso [process_pseudo_spec()]
 #' @export

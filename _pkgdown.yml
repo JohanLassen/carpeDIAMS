@@ -1,0 +1,64 @@
+url: https://johanlassen.github.io/carpeDIAMS/
+
+template:
+  bootstrap: 5
+
+navbar:
+  structure:
+    left: [intro, reference, articles]
+    right: [search, github]
+
+articles:
+- title: Workflows
+  navbar: Workflows
+  contents:
+  - xcms-interactive
+  - dag-cli
+- title: Extending carpeDIAMS
+  navbar: Extending
+  contents:
+  - developer
+
+reference:
+- title: Build an MGF
+  desc: Entry points. `carpediams()` picks one of the three routes.
+  contents:
+  - carpediams
+  - process_xcms
+  - process_targetlist
+  - process_mzml
+- title: Fragment grouping
+  desc: Grouper factories. Pass one as `grouper`.
+  contents:
+  - grouper-contract
+  - ppm_upgma
+  - abs_upgma
+  - iaac_grouper
+  - pelt_grouper
+  - bin_grouper
+  - validate_grouper
+- title: Statistics and filters
+  desc: Score fragment groups (`group_statistics_fn`) and keep the good ones (`filter_fn`).
+  contents:
+  - stats-contract
+  - correlation_statistics
+  - apex_correlation_statistics
+  - filter-contract
+  - correlation_filtering
+  - apex_correlation_filtering
+- title: Consensus m/z
+  contents:
+  - consensus-mz-contract
+  - consensus_mz_weighted
+- title: Spectrum building
+  desc: The per-feature machinery behind the entry points.
+  contents:
+  - clean_pseudo_spectra
+  - process_pseudo_spec
+  - export_mgf
+  - export_pseudospectra
+- title: Low-level
+  contents:
+  - fast_1D_upgma_grouping_cpp
+  - fast_1D_iaac_grouping_cpp
+  - fast_1D_pelt_grouping_cpp

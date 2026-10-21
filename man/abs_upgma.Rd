@@ -7,14 +7,14 @@
 abs_upgma(max_diff = 0.005)
 }
 \arguments{
-\item{max_diff}{Numeric. Absolute m/z tolerance in Da.}
+\item{max_diff}{Maximum group width (max m/z − min m/z) in Da.}
 }
 \value{
-A grouper closure - see [grouper-contract].
+A grouper closure - see \link{grouper-contract}.
 }
 \description{
-Same backend as [ppm_upgma()] but with a fixed `max_diff` in Da.
-Uses only `mz`.
+As \code{\link[=ppm_upgma]{ppm_upgma()}}, but the maximum group width is a fixed value in Da.
+Uses only \code{mz}.
 }
 \examples{
 g <- abs_upgma(max_diff = 0.005)
