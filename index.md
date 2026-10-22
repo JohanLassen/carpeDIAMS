@@ -11,7 +11,6 @@ search, SIRIUS or molecular networking.
 ## Installation
 
 ``` r
-
 # install.packages("pak")
 pak::pak("JohanLassen/carpeDIAMS")
 ```
@@ -25,7 +24,6 @@ Sample subsampling (`subsample = TRUE`) also needs Python with
 takes one of three kinds of input and writes an MGF:
 
 ``` r
-
 library(carpeDIAMS)
 
 # A grouped xcms object (XcmsExperiment or .rds/.qs/.rda path)

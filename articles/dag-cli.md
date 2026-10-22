@@ -48,7 +48,6 @@ Keep stage-specific parameters identical across jobs: `ppm` and
 ## The calls (xcms route)
 
 ``` r
-
 library(carpeDIAMS)
 input   <- "grouped_xcms.rds"
 tmp_dir <- "work/carpediams"
@@ -119,7 +118,6 @@ last feature write an empty parquet.
 Checking that all sample files exist before filtering:
 
 ``` r
-
 manifest <- read.csv(file.path(tmp_dir, "manifest.csv"))
 expected <- c(sprintf("sample_%d_pool.parquet",     manifest$sample_idx),
               sprintf("sample_%d_pointers.parquet", manifest$sample_idx))

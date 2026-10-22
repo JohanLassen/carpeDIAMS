@@ -8,7 +8,6 @@ and
 
 ## Details
 
-
       function(mz, intensity = NULL, target_mz = NULL, scan = NULL, ms1_int = NULL)
 
 Only `mz` is required; each grouper ignores the arguments it does not

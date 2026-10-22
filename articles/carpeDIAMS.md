@@ -1,7 +1,6 @@
 # Getting started with carpeDIAMS
 
 ``` r
-
 library(carpeDIAMS)
 ```
 
@@ -23,7 +22,6 @@ function directly instead if you prefer.
 ### xcms object
 
 ``` r
-
 carpediams(input = "grouped_xcms.rds", output = "features.mgf",
            top_n = 10, ppm = 20, rt_buffer = 5)
 ```
@@ -40,7 +38,6 @@ representative set with apricot (Python).
 ### mzML files and a target list
 
 ``` r
-
 carpediams(input = "data/mzml/", output = "targets.mgf",
            targetlist = "targets.csv", rt_width = 15, ppm = 20)
 ```
@@ -53,7 +50,6 @@ window centred on its `rt`. No peak detection is done.
 ### One mzML file
 
 ``` r
-
 carpediams(input = "sample.mzML", output = "sample.mgf")
 ```
 
@@ -89,7 +85,6 @@ tolerance has to cover both scatter within a sample and calibration
 drift between samples.
 
 ``` r
-
 ppm_upgma(ppm = 20)                       # group width <= 20 ppm of the precursor m/z
 abs_upgma(max_diff = 0.005)               # group width <= 0.005 Da
 iaac_grouper(k = 2, p0 = 12, Isat = 1e4)  # intensity-dependent tolerance
@@ -122,7 +117,6 @@ to reject co-eluting fragments that correlate but peak at the wrong
 time:
 
 ``` r
-
 carpediams(
   input = "grouped_xcms.rds", output = "features.mgf",
   group_statistics_fn = apex_correlation_statistics(min_count = 10),
@@ -135,7 +129,6 @@ carpediams(
 A filter is just a function of the statistics table:
 
 ``` r
-
 carpediams(input = "grouped_xcms.rds", output = "features.mgf",
            filter_fn = function(stats) stats[correlation > 0.6 & count >= 20])
 ```

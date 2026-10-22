@@ -23,14 +23,8 @@ for what that contract looks like at scale). It’s small (~600 KB)
 specifically so it can ship with the package and run in this vignette.
 
 ``` r
-
 library(carpeDIAMS)
 library(data.table)
-#> 
-#> Attaching package: 'data.table'
-#> The following object is masked from 'package:base':
-#> 
-#>     %notin%
 
 fixture_dir <- system.file("testdata", "FT00964", package = "carpeDIAMS")
 fd <- readRDS(file.path(fixture_dir, "fd.rds"))
@@ -44,16 +38,7 @@ Pull the raw MS1+MS2 rows the same way
 does internally — connect, then fetch:
 
 ``` r
-
 con <- setup_connection(fixture_dir)
-#> duckdb keeps downloaded extensions and secrets in a temporary directory:
-#> ℹ /tmp/RtmpehZATr/duckdb
-#> This is removed when the R session ends.
-#> • Extensions are re-downloaded each session.
-#> • Secrets are lost.
-#> ℹ Run duckdb(shared_home = TRUE) (or create ~/.duckdb) to keep them (suitable for most users).
-#> ℹ Run duckdb(shared_home = FALSE) to accept the temporary directory (and silence this message).
-#> ℹ See ?duckdb_storage for details and alternatives.
 raw <- batch_get_feature_data("FT00964", con)
 DBI::dbDisconnect(con, shutdown = TRUE)
 
@@ -74,7 +59,6 @@ Try the default (`ppm_upgma`) against `iaac_grouper` at the production
 tolerance:
 
 ``` r
-
 mz_target <- fd["FT00964", "mzmed"]
 
 stats_ppm  <- process_pseudo_spec(raw, mz_target = mz_target,
@@ -105,7 +89,6 @@ noise. `p0` (for `iaac_grouper`/`pelt_grouper`) sets that tolerance. Too
 tight, and a single real fragment gets reported as two:
 
 ``` r
-
 for (p0 in c(4, 8, 12)) {
   g <- iaac_grouper(k = 1, p0 = p0, Isat = 1e5)
   s <- process_pseudo_spec(raw, mz_target = mz_target, grouper = g)
@@ -135,7 +118,6 @@ signature — see `?grouper-contract`.
 calls it once per feature with `mz`, `intensity` and `target_mz`.
 
 ``` r
-
 # A trivial custom grouper: fixed ppm tolerance, but reject a merge if the
 # combined evidence is too thin (n < 3) - contrived, just to show the shape.
 sparse_aware_grouper <- function(ppm = 20, min_n = 3L) {
@@ -172,7 +154,6 @@ add intra-sample MS1↔︎MS2 apex-agreement columns and thresholds, for when
 correlation alone lets through fragments from a coeluting compound.
 
 ``` r
-
 # A stricter filter: require both a higher correlation AND more supporting
 # (sample, ms1_scan) cells than the package default.
 strict_filter <- function(stats) {
@@ -189,14 +170,6 @@ clean_pseudo_spectra(
   mgf_dir        = NULL,
   progress       = FALSE
 )[, .(feature_id, mz_g2, count, r, fdr)]
-#> duckdb keeps downloaded extensions and secrets in a temporary directory:
-#> ℹ /tmp/RtmpehZATr/duckdb
-#> This is removed when the R session ends.
-#> • Extensions are re-downloaded each session.
-#> • Secrets are lost.
-#> ℹ Run duckdb(shared_home = TRUE) (or create ~/.duckdb) to keep them (suitable for most users).
-#> ℹ Run duckdb(shared_home = FALSE) to accept the temporary directory (and silence this message).
-#> ℹ See ?duckdb_storage for details and alternatives.
 #>    feature_id     mz_g2 count         r          fdr
 #>        <char>     <num> <int>     <num>        <num>
 #> 1:    FT00964  67.05413    96 0.9168420 1.463360e-36

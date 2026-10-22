@@ -6,7 +6,6 @@ are drop-in replaceable in
 
 ## Details
 
-
       function(mz, int) -> single numeric consensus m/z
 
 Called once per fragment group, after grouping; the result becomes the

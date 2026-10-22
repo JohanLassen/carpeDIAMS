@@ -8,7 +8,6 @@ and
 
 ## Details
 
-
       function(dt) -> per-group summary data.table
 
 `dt` holds one feature's rows from
@@ -20,7 +19,6 @@ has dropped rows without a fragment, applied the apex window, and added
 within a group).
 
 The closure returns one row per group with at least
-
 
       group, fragment_mz, mz, int, ms1_int,
       correlation, p_value, fdr, count, n_samples

@@ -22,7 +22,6 @@ tuning the grouping/filtering settings.
 ## 0. Setup: settings in one place
 
 ``` r
-
 library(carpeDIAMS)
 
 xcms_path <- "path/to/grouped_xcms.rds"
@@ -52,7 +51,6 @@ cluster job.
 ## 1. Load the xcms object
 
 ``` r
-
 xobj <- readRDS(xcms_path)
 
 xobj
@@ -74,7 +72,6 @@ never reload the object.
 ## 2. Prepare: subsample, rank, write the manifest
 
 ``` r
-
 carpediams(
   input       = xobj,
   output      = mgf_path,
@@ -104,7 +101,6 @@ CSV, so you can check it in R just as gwf would.
 ## 3. Sample stage: one sample at a time
 
 ``` r
-
 for (sid in manifest$sample_idx) {
   done <- file.exists(file.path(tmp_dir, sprintf(
     c("sample_%d_pool.parquet", "sample_%d_pointers.parquet"), sid)))
@@ -131,7 +127,9 @@ sample’s worth. The iterations are fully independent:
   the [`file.exists()`](https://rdrr.io/r/base/files.html) check skips
   straight to where it stopped.
 - Each iteration is exactly one gwf `batch_XXXX` target. To parallelize,
-  swap the `for` for `furrr::future_walk()` (or
+  swap the `for` for
+  [`furrr::future_walk()`](https://furrr.futureverse.org/reference/future_map.html)
+  (or
   [`parallel::mclapply()`](https://rdrr.io/r/parallel/mclapply.html))
   without touching the body.
 - Pass the same `ppm` / `rt_buffer` to every sample. They shape what
@@ -140,7 +138,6 @@ sample’s worth. The iterations are fully independent:
 Sanity check before moving on:
 
 ``` r
-
 expected <- c(sprintf("sample_%d_pool.parquet",     manifest$sample_idx),
               sprintf("sample_%d_pointers.parquet", manifest$sample_idx))
 setdiff(expected, list.files(tmp_dir))   # character(0) = all present
@@ -149,7 +146,6 @@ setdiff(expected, list.files(tmp_dir))   # character(0) = all present
 ## 4. Filter stage: features in batches
 
 ``` r
-
 for (b in seq_len(n_batches)) {
   batch_file <- file.path(tmp_dir, sprintf("features_batch_%d.parquet", b))
   if (file.exists(batch_file)) next       # resume: skip finished batches
@@ -182,7 +178,6 @@ Splitting the features into `n_batches` contiguous chunks gives you:
   run the rest:
 
   ``` r
-
   res <- arrow::read_parquet(file.path(tmp_dir, "features_batch_1.parquet"))
   length(unique(res$feature_id))
   ```
@@ -201,7 +196,6 @@ different `n_batches`.
 ## 5. Finalize: combine batches and write the MGF
 
 ``` r
-
 carpediams(
   input     = xobj,
   output    = mgf_path,
@@ -234,7 +228,6 @@ target.
 iterate on filter settings; delete it once the MGF is validated:
 
 ``` r
-
 unlink(tmp_dir, recursive = TRUE)
 ```
 

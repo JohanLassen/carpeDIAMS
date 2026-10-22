@@ -6,7 +6,6 @@ drop-in replaceable in
 
 ## Details
 
-
       function(stats) -> row-subset of stats
 
 `stats` is the per-group table from a
